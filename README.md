@@ -1,55 +1,75 @@
-# نظام إدارة مخزن قطع غيار السيارات
+# React + TypeScript + Vite
 
-تطبيق ويب (PWA) لإدارة مخازن ومبيعات ومشتريات قطع غيار السيارات، مبني بواجهة عربية بالكامل (RTL).
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
-## المميزات
+Currently, two official plugins are available:
 
-- **إدارة المنتجات والفئات** — إضافة وتعديل قطع الغيار وتصنيفها.
-- **المخازن** — إدارة أكثر من مخزن ومتابعة الكميات في كل واحد.
-- **المبيعات والفواتير** — إصدار فواتير بيع وطباعتها.
-- **المشتريات (الأوردرات)** — تسجيل أوردرات الشراء من الموردين.
-- **المرتجعات** — تسجيل مرتجعات المبيعات والمشتريات.
-- **الجرد (Stocktake)** — مطابقة الكميات الفعلية بالمخزون المسجل.
-- **العملاء وكشوف الحساب** — متابعة حسابات العملاء وأرصدتهم.
-- **التقارير** — تقارير تفصيلية للمنتجات، المخازن، الأوردرات، والمبيعات، مع تصدير إلى Excel.
-- **سجل النشاط** — تتبع العمليات اللي بتتم على النظام.
-- **دعم العمل كتطبيق (PWA)** — يمكن تثبيته على الجهاز ويعمل بسرعة حتى مع اتصال إنترنت ضعيف.
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
 
-## التقنيات المستخدمة
+## React Compiler
 
-- [React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/)
-- [Vite](https://vite.dev/) لأداة البناء والتطوير
-- [Tailwind CSS v4](https://tailwindcss.com/)
-- [Supabase](https://supabase.com/) لقاعدة البيانات والمصادقة
-- [React Router](https://reactrouter.com/) للتنقل بين الصفحات
-- [Recharts](https://recharts.org/) للرسوم البيانية
-- [SheetJS (xlsx)](https://sheetjs.com/) لتصدير التقارير إلى Excel
+The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
 
-## التشغيل محليًا
+## Expanding the ESLint configuration
 
-```bash
-npm install
-npm run dev
-```
+If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
 
-الأوامر المتاحة:
+```js
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{ts,tsx}'],
+    extends: [
+      // Other configs...
 
-| الأمر | الوظيفة |
-|---|---|
-| `npm run dev` | تشغيل السيرفر المحلي للتطوير |
-| `npm run build` | بناء نسخة الإنتاج |
-| `npm run preview` | معاينة نسخة الإنتاج محليًا |
-| `npm run lint` | فحص الكود بـ ESLint |
+      // Remove tseslint.configs.recommended and replace with this
+      tseslint.configs.recommendedTypeChecked,
+      // Alternatively, use this for stricter rules
+      tseslint.configs.strictTypeChecked,
+      // Optionally, add this for stylistic rules
+      tseslint.configs.stylisticTypeChecked,
 
-## إعداد المتغيرات البيئية
-
-المشروع يحتاج مفاتيح الاتصال بمشروع Supabase الخاص بيك. أنشئ ملف `.env` في جذر المشروع وضيف فيه:
+      // Other configs...
+    ],
+    languageOptions: {
+      parserOptions: {
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+      // other options...
+    },
+  },
+])
 
 ```
-VITE_SUPABASE_URL=your-supabase-url
-VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
+
+You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+
+```js
+// eslint.config.js
+import reactX from 'eslint-plugin-react-x'
+import reactDom from 'eslint-plugin-react-dom'
+
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{ts,tsx}'],
+    extends: [
+      // Other configs...
+      // Enable lint rules for React
+      reactX.configs['recommended-typescript'],
+      // Enable lint rules for React DOM
+      reactDom.configs.recommended,
+    ],
+    languageOptions: {
+      parserOptions: {
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+      // other options...
+    },
+  },
+])
+
 ```
-
-## الترخيص
-
-هذا المشروع ملكية خاصة (Proprietary) تم تطويره لعميل محدد. جميع الحقوق محفوظة، وغير مرخّص للاستخدام أو النسخ أو التعديل العام. راجع ملف [LICENSE](./LICENSE) للتفاصيل.
