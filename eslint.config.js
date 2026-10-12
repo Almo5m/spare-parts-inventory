@@ -6,13 +6,14 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  // database.types.ts ملف مولّد من Supabase (وغالبًا بيتكتب UTF-16 من PowerShell) — مش بيتفحص
+  globalIgnores(['dist', 'src/lib/database.types.ts', 'supabase/functions']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
       js.configs.recommended,
       tseslint.configs.recommended,
-      reactHooks.configs.flat.recommended,
+      reactHooks.configs['recommended-latest'],
       reactRefresh.configs.vite,
     ],
     languageOptions: {

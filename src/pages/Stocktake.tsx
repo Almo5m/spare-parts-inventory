@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Loader2, ClipboardCheck, ChevronDown, ChevronUp } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { nullableArg } from '../lib/rpcArgs'
+import { fetchAll } from '../lib/fetchAll'
 import Select from '../components/Select'
 import type { Database } from '../lib/database.types'
 
@@ -48,7 +50,7 @@ export default function Stocktake() {
         if (def) setWarehouseId(def.id)
       }
     })
-    supabase.from('products').select('id, name').then(({ data }) => {
+    fetchAll((from, to) => supabase.from('products').select('id, name').order('id').range(from, to)).then(({ data }) => {
       if (cancelled) return
       if (data) setProductNames(Object.fromEntries(data.map((p) => [p.id, p.name])))
     })
@@ -61,10 +63,12 @@ export default function Stocktake() {
     setLoading(true)
 
     Promise.all([
-      supabase
+      fetchAll((from, to) => supabase
         .from('inventory')
         .select('product_id, quantity, products(part_number, name)')
-        .eq('warehouse_id', warehouseId),
+        .eq('warehouse_id', warehouseId)
+        .order('product_id')
+        .range(from, to)),
     ]).then(([inv]) => {
       if (cancelled) return
 
@@ -153,7 +157,7 @@ export default function Stocktake() {
 
     const { error } = await supabase.rpc('apply_stocktake', {
       p_warehouse_id: warehouseId,
-      p_notes: notes || null,
+      p_notes: nullableArg(notes || null),
       p_items: changedItems,
     })
 

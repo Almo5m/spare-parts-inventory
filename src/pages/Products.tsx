@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from 'react'
 import { ChevronDown, ChevronUp, Loader2, BarChart3, Pencil, Trash2, Check, X, Power } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
+import { fetchAll } from '../lib/fetchAll'
 import { loadDraft, saveDraft, clearDraft } from '../lib/draft'
 import Select from '../components/Select'
 import type { Database } from '../lib/database.types'
@@ -63,11 +64,11 @@ export default function Products() {
     let cancelled = false
 
     Promise.all([
-      supabase.from('products').select('*').order('created_at', { ascending: false }),
+      fetchAll((from, to) => supabase.from('products').select('*').order('created_at', { ascending: false }).order('id').range(from, to)),
       supabase.from('categories').select('*').order('name', { ascending: true }),
     ]).then(([productsRes, categoriesRes]) => {
       if (cancelled) return
-      if (productsRes.error) setError(productsRes.error.message)
+      if (productsRes.error) setError(productsRes.error)
       else setProducts(productsRes.data ?? [])
       if (categoriesRes.data) setCategories(categoriesRes.data)
       setLoading(false)
@@ -187,7 +188,11 @@ export default function Products() {
   }
 
   const toggleActive = async (product: Product) => {
-    await supabase.from('products').update({ is_active: !product.is_active }).eq('id', product.id)
+    const { error } = await supabase.from('products').update({ is_active: !product.is_active }).eq('id', product.id)
+    if (error) {
+      setError(`تعذر تغيير حالة الصنف: ${error.message}`)
+      return
+    }
     await loadProducts()
   }
 

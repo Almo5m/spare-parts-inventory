@@ -1,21 +1,27 @@
 import { useEffect, useState } from 'react'
-import { Loader2, Upload, Save, Download, Database, Info, User, Bell, Users, Power, UserPlus, Pencil, KeyRound, X, Check } from 'lucide-react'
+import { Loader2, Upload, Save, Info, User, Bell, Users, Power, UserPlus, Pencil, KeyRound, X, Check } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../context/useAuth'
+import BackupPanel from '../components/settings/BackupPanel'
+import { MIN_PASSWORD_LENGTH, normalizeUsername } from '../lib/authRules'
+import { nullableArg } from '../lib/rpcArgs'
 import type { Database as DB } from '../lib/database.types'
 
 type UserRow = DB['public']['Tables']['users']['Row']
 
 interface CompanySettings {
   company_name: string
-  phone: string
+  phone: string | null
   logo_data_url: string | null
-  invoice_footer_message: string
+  invoice_footer_message: string | null
   next_sales_invoice_number: number
   next_order_number: number
   notify_low_stock: boolean
   notify_debts: boolean
 }
+
+const LOGO_MAX_BYTES = 200 * 1024
+const LOGO_ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 
 type SettingsTab = 'company' | 'account' | 'users' | 'notifications' | 'backup' | 'system'
 
@@ -23,15 +29,6 @@ const tabLabels: Record<SettingsTab, string> = {
   company: 'بيانات الشركة', account: 'الحساب', users: 'المستخدمون', notifications: 'الإشعارات',
   backup: 'النسخ الاحتياطي', system: 'معلومات النظام',
 }
-
-const BACKUP_TABLES = [
-  'company_settings', 'warehouses', 'categories', 'products', 'product_units',
-  'customers', 'inventory', 'orders', 'order_items', 'inventory_lots',
-  'sales_invoices', 'sales_invoice_items', 'sale_item_lot_usage',
-  'sales_returns', 'sales_return_items',
-  'order_returns', 'order_return_items', 'stocktakes', 'stocktake_items',
-  'payments', 'treasury_transactions',
-] as const
 
 export default function Settings() {
   const { profile } = useAuth()
@@ -54,8 +51,6 @@ export default function Settings() {
   const [usernameBusy, setUsernameBusy] = useState(false)
 
   // نسخ احتياطي
-  const [backupBusy, setBackupBusy] = useState(false)
-  const [restoreLog, setRestoreLog] = useState<string[]>([])
 
   // إدارة المستخدمين
   const [users, setUsers] = useState<UserRow[]>([])
@@ -68,6 +63,8 @@ export default function Settings() {
   const [editingUsernameValue, setEditingUsernameValue] = useState('')
   const [userActionBusy, setUserActionBusy] = useState<string | null>(null)
   const [userActionError, setUserActionError] = useState('')
+  const [resetPasswordFor, setResetPasswordFor] = useState<string | null>(null)
+  const [resetPasswordValue, setResetPasswordValue] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -152,8 +149,19 @@ export default function Settings() {
   }, [tab])
 
   const toggleUserActive = async (u: UserRow) => {
+    setUserActionError('')
+    // منع إيقاف حسابك انت بالغلط — كده هتقفل على نفسك من الموقع
+    if (u.is_active && u.username === username) {
+      setUserActionError('مينفعش توقف حسابك انت — هتتقفل برّه النظام')
+      return
+    }
     setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, is_active: !x.is_active } : x)))
-    await supabase.from('users').update({ is_active: !u.is_active }).eq('id', u.id)
+    const { error } = await supabase.from('users').update({ is_active: !u.is_active }).eq('id', u.id)
+    if (error) {
+      // رجّع الحالة القديمة بدل ما الشاشة تفضل تعرض نجاح وهمي
+      setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, is_active: u.is_active } : x)))
+      setUserActionError(`تعذر تغيير حالة الحساب: ${error.message}`)
+    }
   }
 
   const updateUserRole = async (
@@ -168,10 +176,15 @@ export default function Settings() {
       )
     )
 
-    await supabase
+    setUserActionError('')
+    const { error } = await supabase
       .from('users')
       .update({ role })
       .eq('id', u.id)
+    if (error) {
+      setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, role: u.role } : x)))
+      setUserActionError(`تعذر تغيير الدور: ${error.message}`)
+    }
   }
 
   const handleCreateUser = async () => {
@@ -180,11 +193,15 @@ export default function Settings() {
       setAddUserError('اسم المستخدم وكلمة المرور والاسم بالكامل مطلوبين')
       return
     }
+    if (addUserForm.password.length < MIN_PASSWORD_LENGTH) {
+      setAddUserError(`كلمة المرور لازم تكون ${MIN_PASSWORD_LENGTH} حروف/أرقام على الأقل`)
+      return
+    }
     setAddUserBusy(true)
     const { data, error } = await supabase.functions.invoke('manage-users', {
       body: {
         action: 'create',
-        username: addUserForm.username.trim(),
+        username: normalizeUsername(addUserForm.username),
         password: addUserForm.password,
         full_name: addUserForm.full_name.trim(),
         phone: addUserForm.phone.trim() || null,
@@ -217,7 +234,7 @@ export default function Settings() {
     setUserActionBusy(userId)
     setUserActionError('')
     const { data, error } = await supabase.functions.invoke('manage-users', {
-      body: { action: 'update_username', user_id: userId, new_username: editingUsernameValue.trim() },
+      body: { action: 'update_username', user_id: userId, new_username: normalizeUsername(editingUsernameValue) },
     })
     const serverError = (data as { error?: string } | null)?.error
     if (error || serverError) {
@@ -230,22 +247,31 @@ export default function Settings() {
     await loadUsers()
   }
 
-  const handleResetOtherPassword = async (u: UserRow) => {
-    const newPass = window.prompt(`كلمة مرور جديدة لـ "${u.full_name}" (6 حروف/أرقام على الأقل):`)
-    if (!newPass) return
+  const startResetPassword = (u: UserRow) => {
+    setResetPasswordFor(u.id)
+    setResetPasswordValue('')
+    setUserActionError('')
+  }
+
+  const saveResetPassword = async (u: UserRow) => {
+    if (resetPasswordValue.length < MIN_PASSWORD_LENGTH) {
+      setUserActionError(`كلمة المرور لازم تكون ${MIN_PASSWORD_LENGTH} حروف/أرقام على الأقل`)
+      return
+    }
     setUserActionBusy(u.id)
     setUserActionError('')
     const { data, error } = await supabase.functions.invoke('manage-users', {
-      body: { action: 'reset_password', user_id: u.id, new_password: newPass },
+      body: { action: 'reset_password', user_id: u.id, new_password: resetPasswordValue },
     })
     const serverError = (data as { error?: string } | null)?.error
+    setUserActionBusy(null)
     if (error || serverError) {
       setUserActionError(serverError || error?.message || 'تعذر تغيير كلمة المرور')
-      setUserActionBusy(null)
       return
     }
-    setUserActionBusy(null)
-    alert('اتغيّرت كلمة المرور بنجاح')
+    setResetPasswordFor(null)
+    setResetPasswordValue('')
+    alert(`اتغيّرت كلمة مرور "${u.full_name}" بنجاح`)
   }
 
   const handleChangeOwnUsername = async () => {
@@ -256,7 +282,7 @@ export default function Settings() {
     if (!userData.user) { setUsernameBusy(false); return }
 
     const { data, error: fnError } = await supabase.functions.invoke('manage-users', {
-      body: { action: 'update_username', user_id: userData.user.id, new_username: username.trim() },
+      body: { action: 'update_username', user_id: userData.user.id, new_username: normalizeUsername(username) },
     })
     const serverError = (data as { error?: string } | null)?.error
     if (fnError || serverError) {
@@ -272,6 +298,18 @@ export default function Settings() {
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file || !settings) return
+    setError('')
+    // الشعار بيتخزن جوه قاعدة البيانات نفسها كنص، فلازم يكون صغير ونوعه صور عادية بس (من غير SVG)
+    if (!LOGO_ALLOWED_TYPES.includes(file.type)) {
+      setError('الشعار لازم يكون صورة PNG أو JPG أو WebP')
+      e.target.value = ''
+      return
+    }
+    if (file.size > LOGO_MAX_BYTES) {
+      setError(`حجم الشعار أكبر من ${LOGO_MAX_BYTES / 1024} كيلوبايت — صغّره الأول`)
+      e.target.value = ''
+      return
+    }
     const reader = new FileReader()
     reader.onload = () => setSettings({ ...settings, logo_data_url: reader.result as string })
     reader.readAsDataURL(file)
@@ -294,8 +332,8 @@ export default function Settings() {
   const handleNumberingSave = async () => {
     setError(''); setSuccess(''); setSaving(true)
     const { error } = await supabase.rpc('set_invoice_numbering', {
-      p_next_sales_number: Number(nextSalesNumber) || null,
-      p_next_order_number: Number(nextOrderNumber) || null,
+      p_next_sales_number: nullableArg(Number(nextSalesNumber) || null),
+      p_next_order_number: nullableArg(Number(nextOrderNumber) || null),
     })
     if (error) setError(error.message)
     else setSuccess('تم تحديث ترقيم الفواتير')
@@ -303,7 +341,12 @@ export default function Settings() {
   }
 
   const handleSaveAccount = async () => {
-    setError(''); setSuccess(''); setSaving(true)
+    setError(''); setSuccess('')
+    if (newPassword && newPassword.length < MIN_PASSWORD_LENGTH) {
+      setError(`كلمة المرور الجديدة لازم تكون ${MIN_PASSWORD_LENGTH} حروف/أرقام على الأقل`)
+      return
+    }
+    setSaving(true)
     const { data: userData } = await supabase.auth.getUser()
     if (!userData.user) { setSaving(false); return }
 
@@ -336,67 +379,13 @@ export default function Settings() {
     if (!settings) return
     const newValue = !settings[key]
     setSettings({ ...settings, [key]: newValue })
-    if (key === 'notify_low_stock') {
-      await supabase.from('company_settings').update({ notify_low_stock: newValue }).eq('id', true)
-    } else {
-      await supabase.from('company_settings').update({ notify_debts: newValue }).eq('id', true)
+    const { error } = key === 'notify_low_stock'
+      ? await supabase.from('company_settings').update({ notify_low_stock: newValue }).eq('id', true)
+      : await supabase.from('company_settings').update({ notify_debts: newValue }).eq('id', true)
+    if (error) {
+      setSettings({ ...settings, [key]: !newValue })
+      setError(`تعذر حفظ إعداد الإشعارات: ${error.message}`)
     }
-  }
-
-  const handleBackup = async () => {
-    setBackupBusy(true)
-    const backup: Record<string, unknown> = {
-      meta: { created_at: new Date().toISOString(), version: '1.0' },
-    }
-    for (const table of BACKUP_TABLES) {
-      const { data } = await supabase.from(table).select('*')
-      backup[table] = data ?? []
-    }
-    // بيانات المستخدمين للمرجعية فقط (بدون أي بيانات دخول حساسة)
-    const { data: users } = await supabase.from('users').select('id, full_name, username, role, is_active')
-    backup['users_reference'] = users ?? []
-
-    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    a.href = url
-    a.download = `نسخة-احتياطية-${stamp}.json`
-    a.click()
-    URL.revokeObjectURL(url)
-    setBackupBusy(false)
-  }
-
-  const handleRestore = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    if (!confirm('استعادة النسخة دي هتضيف/تحدّث البيانات فوق الموجود حاليًا في النظام، ومش هترجع فيها. متأكد؟')) {
-      e.target.value = ''
-      return
-    }
-
-    setBackupBusy(true)
-    setRestoreLog([])
-    const log: string[] = []
-
-    try {
-      const text = await file.text()
-      const backup = JSON.parse(text)
-
-      for (const table of BACKUP_TABLES) {
-        const rows = backup[table]
-        if (!Array.isArray(rows) || rows.length === 0) continue
-        const { error } = await supabase.from(table).upsert(rows, { onConflict: 'id' })
-        log.push(error ? `❌ ${table}: ${error.message}` : `✅ ${table}: ${rows.length} صف`)
-      }
-    } catch {
-      log.push('❌ الملف غير صالح أو تالف')
-    }
-
-    setRestoreLog(log)
-    setBackupBusy(false)
-    e.target.value = ''
   }
 
   if (loading) {
@@ -449,7 +438,7 @@ export default function Settings() {
               )}
               <label className="flex items-center gap-2 text-sm text-accent-dark cursor-pointer hover:underline">
                 <Upload size={16} />رفع شعار جديد
-                <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
+                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleLogoUpload} className="hidden" />
               </label>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
@@ -572,7 +561,7 @@ export default function Settings() {
                     type="password"
                     value={addUserForm.password}
                     onChange={(e) => setAddUserForm({ ...addUserForm, password: e.target.value })}
-                    placeholder="كلمة المرور (6 حروف على الأقل)"
+                    placeholder={`كلمة المرور (${MIN_PASSWORD_LENGTH} حروف على الأقل)`}
                     className="border border-border-soft rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent"
                   />
                 </div>
@@ -625,6 +614,25 @@ export default function Settings() {
                           <Pencil size={11} className="text-slate-400" />
                         </button>
                       )}
+                      {resetPasswordFor === u.id && (
+                        <div className="flex items-center gap-1.5 mt-2">
+                          <input
+                            type="password"
+                            value={resetPasswordValue}
+                            onChange={(e) => setResetPasswordValue(e.target.value)}
+                            placeholder="كلمة المرور الجديدة"
+                            autoComplete="new-password"
+                            autoFocus
+                            className="text-xs border border-border-soft rounded-lg px-2 py-1 w-44 focus:outline-none focus:ring-2 focus:ring-accent"
+                          />
+                          <button onClick={() => saveResetPassword(u)} disabled={userActionBusy === u.id} className="text-emerald-600 hover:text-emerald-700">
+                            {userActionBusy === u.id ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                          </button>
+                          <button onClick={() => setResetPasswordFor(null)} className="text-slate-400 hover:text-red-600">
+                            <X size={14} />
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 shrink-0">
                       <select
@@ -644,7 +652,7 @@ export default function Settings() {
                         <option value="accountant">محاسب</option>
                       </select>
                       <button
-                        onClick={() => handleResetOtherPassword(u)}
+                        onClick={() => startResetPassword(u)}
                         disabled={userActionBusy === u.id}
                         className="text-slate-500 hover:text-accent-dark disabled:opacity-50"
                         title="إعادة تعيين كلمة المرور"
@@ -700,41 +708,7 @@ export default function Settings() {
         </div>
       )}
 
-      {tab === 'backup' && (
-        <div className="space-y-6">
-          <div className="card p-5 md:p-6">
-            <div className="flex items-center gap-2 mb-3">
-              <Database size={16} className="text-accent-dark" />
-              <p className="font-display font-bold text-navy-900">إنشاء نسخة احتياطية</p>
-            </div>
-            <p className="text-sm text-slate-500 mb-4">
-              بيجمّع كل بيانات النظام (المخازن، الأصناف، العملاء، الفواتير، الطلبيات،
-              المرتجعات، الجرد...) في ملف JSON واحد وينزّله على جهازك.
-            </p>
-            <button onClick={handleBackup} disabled={backupBusy} className="btn-primary flex items-center justify-center gap-2 text-white rounded-xl px-5 py-2.5 font-medium transition-all disabled:opacity-70">
-              {backupBusy ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} إنشاء نسخة احتياطية
-            </button>
-          </div>
-
-          <div className="card p-5 md:p-6">
-            <p className="font-display font-bold text-navy-900 mb-3">استعادة نسخة احتياطية</p>
-            <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-4">
-              تحذير: الاستعادة بتضيف/تحدّث البيانات فوق الموجود حاليًا، ومفيش تراجع
-              بعدها. جرّبها على نسخة تجريبية الأول لو مش متأكد.
-            </p>
-            <label className="inline-flex items-center gap-2 bg-navy-900 text-white rounded-xl px-5 py-2.5 text-sm font-medium hover:bg-navy-800 transition-colors cursor-pointer">
-              {backupBusy && <Loader2 size={16} className="animate-spin" />}
-              اختيار ملف واستعادة
-              <input type="file" accept="application/json" onChange={handleRestore} disabled={backupBusy} className="hidden" />
-            </label>
-            {restoreLog.length > 0 && (
-              <div className="mt-4 text-xs space-y-1 font-mono-data bg-surface rounded-lg p-3 max-h-60 overflow-y-auto">
-                {restoreLog.map((l, i) => <p key={i}>{l}</p>)}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {tab === 'backup' && <BackupPanel />}
 
       {tab === 'system' && (
         <div className="card p-5 md:p-6">

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Loader2, Trash2, Plus } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { nullableArg } from '../lib/rpcArgs'
+import { fetchAll } from '../lib/fetchAll'
 import { loadDraft, saveDraft, clearDraft } from '../lib/draft'
 import { useAuth } from '../context/useAuth'
 import Select from '../components/Select'
@@ -72,9 +74,9 @@ export default function Sales() {
     let cancelled = false
 
     Promise.all([
-      supabase.from('products').select('*').order('name'),
-      supabase.from('product_units').select('*'),
-      supabase.from('customers').select('*').order('name'),
+      fetchAll((from, to) => supabase.from('products').select('*').order('name').order('id').range(from, to)),
+      fetchAll((from, to) => supabase.from('product_units').select('*').order('id').range(from, to)),
+      fetchAll((from, to) => supabase.from('customers').select('*').order('name').order('id').range(from, to)),
       supabase.from('warehouses').select('*').order('created_at'),
     ]).then(([p, u, c, w]) => {
       if (cancelled) return
@@ -92,16 +94,20 @@ export default function Sales() {
     })
 
     return () => { cancelled = true }
+    // السبب: التحميل الأولي بيحصل مرة واحدة بس، و warehouseId بيتقرا جواه لمرة واحدة
+    // (يختار المخزن الافتراضي لو مفيش مسودة) — مينفعش يعيد التحميل كل ما المخزن يتغير.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     if (!warehouseId) return
     let cancelled = false
-    supabase
+    fetchAll((from, to) => supabase
       .from('inventory')
       .select('product_id')
       .eq('warehouse_id', warehouseId)
+      .order('product_id')
+      .range(from, to))
       .then(({ data }) => {
         if (cancelled) return
         setInWarehouseProductIds(new Set((data ?? []).map((r) => r.product_id)))
@@ -231,7 +237,7 @@ export default function Sales() {
     const paid = Number(paidAmount) || 0
 
     const { data: invoiceId, error } = await supabase.rpc('create_sale_invoice', {
-      p_customer_id: customerId || null,
+      p_customer_id: nullableArg(customerId || null),
       p_warehouse_id: warehouseId,
       p_items: cart.map((item) => ({
         product_id: item.product_id,

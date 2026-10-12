@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Search, Loader2 } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { escapeLike } from '../lib/escapeLike'
 
 interface JumpResult {
   type: 'طلبية' | 'فاتورة' | 'صنف' | 'عميل' | 'مخزن'
@@ -40,7 +41,7 @@ export default function ReportQuickJump() {
     let cancelled = false
     setLoading(true)
     const timeout = setTimeout(async () => {
-      const like = `%${term}%`
+      const like = `%${escapeLike(term)}%`
       const [orders, salesInvoices, productsByName, productsByPart, customers, warehouses] = await Promise.all([
         supabase.from('orders').select('id, order_number').ilike('order_number', like).limit(5),
         supabase.from('sales_invoices').select('id, invoice_number').ilike('invoice_number', like).limit(5),

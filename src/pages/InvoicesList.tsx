@@ -2,9 +2,13 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Loader2, Eye, XCircle, FileSpreadsheet, BarChart3 } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { fetchAll } from '../lib/fetchAll'
 import { exportToExcel } from '../lib/exportExcel'
 import type { Database } from '../lib/database.types'
 import InvoicePrint, { type InvoicePrintData } from '../components/InvoicePrint'
+
+// أقصى عدد فواتير/طلبيات بتتحمّل في القائمة (الأحدث الأول). الأقدم متاح من التقارير.
+const LIST_LIMIT = 500
 
 type SaleInvoice = Database['public']['Tables']['sales_invoices']['Row']
 type Order = Database['public']['Tables']['orders']['Row']
@@ -34,17 +38,19 @@ export default function InvoicesList() {
   const [viewLoading, setViewLoading] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [error, setError] = useState('')
+  const [truncated, setTruncated] = useState(false)
 
   const loadAll = async () => {
     const [s, o, c, wh, prod, users] = await Promise.all([
-      supabase.from('sales_invoices').select('*').order('created_at', { ascending: false }),
-      supabase.from('orders').select('*').order('created_at', { ascending: false }),
-      supabase.from('customers').select('id, name'),
+      supabase.from('sales_invoices').select('*').order('created_at', { ascending: false }).limit(LIST_LIMIT),
+      supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(LIST_LIMIT),
+      fetchAll((from, to) => supabase.from('customers').select('id, name').order('id').range(from, to)),
       supabase.from('warehouses').select('id, name'),
-      supabase.from('products').select('id, name'),
+      fetchAll((from, to) => supabase.from('products').select('id, name').order('id').range(from, to)),
       supabase.from('users').select('id, full_name'),
     ])
     if (s.data) setSalesInvoices(s.data)
+    setTruncated((s.data?.length ?? 0) >= LIST_LIMIT || (o.data?.length ?? 0) >= LIST_LIMIT)
     if (o.data) setOrders(o.data)
     if (c.data) setCustomerNames(Object.fromEntries(c.data.map((x) => [x.id, x.name])))
     if (wh.data) setWarehouseNames(Object.fromEntries(wh.data.map((x) => [x.id, x.name])))
@@ -57,7 +63,6 @@ export default function InvoicesList() {
     let cancelled = false
     loadAll().then(() => { if (cancelled) return })
     return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const viewSale = async (invoice: SaleInvoice) => {
@@ -230,6 +235,12 @@ export default function InvoicesList() {
           <span className="hidden sm:inline">تصدير Excel</span>
         </button>
       </div>
+
+      {truncated && (
+        <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mb-4">
+          القائمة بتعرض آخر {LIST_LIMIT} حركة بس. للأقدم استخدم صفحة التقارير (فيها فلتر بالفترة) أو البحث الشامل فوق.
+        </p>
+      )}
 
       <div className="flex gap-2 mb-6">
         <button

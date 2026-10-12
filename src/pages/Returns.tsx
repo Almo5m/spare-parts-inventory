@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Loader2, Undo2 } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { nullableArg } from '../lib/rpcArgs'
+import { fetchAll } from '../lib/fetchAll'
 import Select from '../components/Select'
 import type { Database } from '../lib/database.types'
 
@@ -48,10 +50,10 @@ export default function Returns() {
     Promise.all([
       supabase.from('sales_invoices').select('*').order('created_at', { ascending: false }).limit(100),
       supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(100),
-      supabase.from('customers').select('id, name'),
+      fetchAll((from, to) => supabase.from('customers').select('id, name').order('id').range(from, to)),
       supabase.from('warehouses').select('id, name'),
-      supabase.from('products').select('id, name, base_unit'),
-      supabase.from('product_units').select('*'),
+      fetchAll((from, to) => supabase.from('products').select('id, name, base_unit').order('id').range(from, to)),
+      fetchAll((from, to) => supabase.from('product_units').select('*').order('id').range(from, to)),
     ]).then(([inv, ord, c, w, p, pu]) => {
       if (cancelled) return
       if (inv.data) setInvoices(inv.data)
@@ -150,7 +152,7 @@ export default function Returns() {
     const { error } = await supabase.rpc('create_sales_return', {
       p_sales_invoice_id: selectedInvoiceId,
       p_items: items,
-      p_notes: notes || null,
+      p_notes: nullableArg(notes || null),
     })
 
     if (error) {
@@ -186,7 +188,7 @@ export default function Returns() {
     const { error } = await supabase.rpc('create_order_return', {
       p_order_id: selectedOrderId,
       p_items: items,
-      p_notes: notes || null,
+      p_notes: nullableArg(notes || null),
     })
 
     if (error) {

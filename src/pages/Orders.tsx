@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Loader2, Trash2, Plus } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { nullableArg } from '../lib/rpcArgs'
+import { fetchAll } from '../lib/fetchAll'
 import { loadDraft, saveDraft, clearDraft } from '../lib/draft'
 import { useAuth } from '../context/useAuth'
 import Select from '../components/Select'
@@ -67,8 +69,8 @@ export default function Orders() {
     let cancelled = false
 
     Promise.all([
-      supabase.from('products').select('*').order('name'),
-      supabase.from('product_units').select('*'),
+      fetchAll((from, to) => supabase.from('products').select('*').order('name').order('id').range(from, to)),
+      fetchAll((from, to) => supabase.from('product_units').select('*').order('id').range(from, to)),
       supabase.from('warehouses').select('*').order('created_at'),
     ]).then(([p, u, w]) => {
       if (cancelled) return
@@ -85,6 +87,8 @@ export default function Orders() {
     })
 
     return () => { cancelled = true }
+    // السبب: التحميل الأولي بيحصل مرة واحدة بس، و warehouseId بيتقرا جواه لمرة واحدة
+    // (يختار المخزن الافتراضي لو مفيش مسودة) — مينفعش يعيد التحميل كل ما المخزن يتغير.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -180,7 +184,7 @@ export default function Orders() {
 
     const { data: orderId, error } = await supabase.rpc('create_order', {
       p_warehouse_id: warehouseId,
-      p_notes: notes || null,
+      p_notes: nullableArg(notes || null),
       p_items: cart.map((item) => ({
         product_id: item.product_id,
         unit_name: item.unit_name,

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Loader2, ArrowRight, FileSpreadsheet } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { fetchAll } from '../lib/fetchAll'
 import { exportMultiSheetExcel } from '../lib/exportExcel'
 import type { Database } from '../lib/database.types'
 
@@ -28,10 +29,11 @@ export default function SaleReport() {
 
   useEffect(() => {
     if (!id) return
+    const invoiceId = id
     let cancelled = false
 
     async function load() {
-      const { data: invoiceData } = await supabase.from('sales_invoices').select('*').eq('id', id).single()
+      const { data: invoiceData } = await supabase.from('sales_invoices').select('*').eq('id', invoiceId).single()
       if (!invoiceData) { setLoading(false); return }
       if (cancelled) return
       setInvoice(invoiceData)
@@ -41,8 +43,8 @@ export default function SaleReport() {
           ? supabase.from('customers').select('name').eq('id', invoiceData.customer_id).single()
           : Promise.resolve({ data: null }),
         supabase.from('warehouses').select('name').eq('id', invoiceData.warehouse_id).single(),
-        supabase.from('sales_invoice_items').select('*').eq('invoice_id', id),
-        supabase.from('products').select('id, name'),
+        supabase.from('sales_invoice_items').select('*').eq('invoice_id', invoiceId),
+        fetchAll((from, to) => supabase.from('products').select('id, name').order('id').range(from, to)),
       ])
 
       if (cancelled) return

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Loader2, ArrowRight, FileSpreadsheet } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { fetchAll } from '../lib/fetchAll'
 import { exportMultiSheetExcel } from '../lib/exportExcel'
 import type { Database } from '../lib/database.types'
 
@@ -29,18 +30,19 @@ export default function OrderReport() {
 
   useEffect(() => {
     if (!id) return
+    const orderId = id
     let cancelled = false
 
     async function load() {
-      const { data: orderData } = await supabase.from('orders').select('*').eq('id', id).single()
+      const { data: orderData } = await supabase.from('orders').select('*').eq('id', orderId).single()
       if (!orderData) { setLoading(false); return }
       setOrder(orderData)
 
       const { data: wh } = await supabase.from('warehouses').select('name').eq('id', orderData.warehouse_id).single()
       setWarehouseName(wh?.name ?? '-')
 
-      const { data: orderItems } = await supabase.from('order_items').select('*').eq('order_id', id)
-      const { data: products } = await supabase.from('products').select('id, name')
+      const { data: orderItems } = await supabase.from('order_items').select('*').eq('order_id', orderId)
+      const { data: products } = await fetchAll((from, to) => supabase.from('products').select('id, name').order('id').range(from, to))
       const productMap = Object.fromEntries((products ?? []).map((p) => [p.id, p.name]))
 
       // كل صنف في الطلبية له دفعة (Lot) واحدة بالظبط مربوطة بيها — ده
@@ -50,7 +52,7 @@ export default function OrderReport() {
         .from('inventory_lots')
         .select('*')
         .eq('source_type', 'order')
-        .eq('source_id', id)
+        .eq('source_id', orderId)
 
       const reports: ItemReport[] = []
       for (const item of orderItems ?? []) {

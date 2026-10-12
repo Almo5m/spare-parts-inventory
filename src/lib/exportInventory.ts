@@ -1,5 +1,6 @@
 import { supabase } from './supabaseClient'
 import { exportMultiSheetExcel } from './exportExcel'
+import { fetchAll } from './fetchAll'
 
 /**
  * تصدير المخزون الكامل لمخزن واحد بالتفصيل — رقم القطعة، الباركود،
@@ -10,16 +11,20 @@ import { exportMultiSheetExcel } from './exportExcel'
  */
 export async function exportWarehouseInventory(warehouseId: string, warehouseName: string) {
   const [invRes, lotsRes, categoriesRes] = await Promise.all([
-    supabase
+    fetchAll((from, to) => supabase
       .from('inventory')
       .select('product_id, quantity, products(part_number, barcode, name, category_id, base_unit, sale_price, min_stock_alert)')
-      .eq('warehouse_id', warehouseId),
-    supabase
+      .eq('warehouse_id', warehouseId)
+      .order('product_id')
+      .range(from, to)),
+    fetchAll((from, to) => supabase
       .from('inventory_lots')
       .select('product_id, unit_cost, quantity_remaining')
       .eq('warehouse_id', warehouseId)
-      .gt('quantity_remaining', 0),
-    supabase.from('categories').select('id, name'),
+      .gt('quantity_remaining', 0)
+      .order('id')
+      .range(from, to)),
+    fetchAll((from, to) => supabase.from('categories').select('id, name').order('id').range(from, to)),
   ])
 
   const categoryMap = Object.fromEntries((categoriesRes.data ?? []).map((c) => [c.id, c.name]))

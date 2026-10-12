@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useCallback, useEffect, useState, useRef } from 'react'
 import { Bell } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../context/useAuth'
@@ -84,6 +84,12 @@ export default function NotificationBell() {
   // مايتلخبطش عداد الإشعارات بينهم
   const lastSeenKey = `${LAST_SEEN_KEY_PREFIX}_${session?.user.id ?? 'guest'}`
 
+  const updateUnread = useCallback((list: Notification[]) => {
+    const lastSeen = localStorage.getItem(lastSeenKey)
+    const lastSeenDate = lastSeen ? new Date(lastSeen) : new Date(0)
+    setUnreadCount(list.filter((n) => new Date(n.created_at) > lastSeenDate).length)
+  }, [lastSeenKey])
+
   useEffect(() => {
     let cancelled = false
 
@@ -127,7 +133,7 @@ export default function NotificationBell() {
       cancelled = true
       supabase.removeChannel(channel)
     }
-  }, [])
+  }, [updateUnread])
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -138,12 +144,6 @@ export default function NotificationBell() {
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
-
-  const updateUnread = (list: Notification[]) => {
-    const lastSeen = localStorage.getItem(lastSeenKey)
-    const lastSeenDate = lastSeen ? new Date(lastSeen) : new Date(0)
-    setUnreadCount(list.filter((n) => new Date(n.created_at) > lastSeenDate).length)
-  }
 
   const handleOpen = () => {
     setOpen((prev) => !prev)

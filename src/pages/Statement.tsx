@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Loader2, ArrowRight, Wallet, FileSpreadsheet } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { nullableArg } from '../lib/rpcArgs'
+import { fetchAll } from '../lib/fetchAll'
 import { exportToExcel } from '../lib/exportExcel'
 import type { Database } from '../lib/database.types'
 
@@ -32,9 +34,9 @@ export default function Statement() {
 
     const [partyRes, invoicesRes, paymentsRes, returnsRes] = await Promise.all([
       supabase.from('customers').select('*').eq('id', id).single(),
-      supabase.from('sales_invoices').select('*').eq('customer_id', id),
-      supabase.from('payments').select('*').eq('party_type', 'customer').eq('party_id', id),
-      supabase.from('sales_returns').select('*, sales_invoices(invoice_number)').eq('customer_id', id),
+      fetchAll((from, to) => supabase.from('sales_invoices').select('*').eq('customer_id', id).order('id').range(from, to)),
+      fetchAll((from, to) => supabase.from('payments').select('*').eq('party_type', 'customer').eq('party_id', id).order('id').range(from, to)),
+      fetchAll((from, to) => supabase.from('sales_returns').select('*, sales_invoices(invoice_number)').eq('customer_id', id).order('id').range(from, to)),
     ])
 
     if (partyRes.data) setParty(partyRes.data)
@@ -76,6 +78,8 @@ export default function Statement() {
 
   useEffect(() => {
     loadData()
+    // السبب: loadData دالة بتتعرّف كل render وبنناديها هنا عند تغيير العميل (id) بس؛
+    // لو دخلناها في الاعتماديات هتتكرر في حلقة لا نهائية.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
@@ -101,7 +105,7 @@ export default function Statement() {
       p_party_id: id,
       p_direction: 'in',
       p_amount: value,
-      p_notes: notes || null,
+      p_notes: nullableArg(notes || null),
     })
 
     if (error) {

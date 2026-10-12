@@ -25,3 +25,15 @@ export function saveDraft<T>(key: string, value: T): void {
 export function clearDraft(key: string): void {
   localStorage.removeItem(PREFIX + key)
 }
+
+// بتمسح كل المسودات (بنناديها عند تسجيل الخروج، عشان بيانات فاتورة نصف مكتوبة
+// متفضلش على الجهاز لو حد تاني استخدمه)
+export function clearAllDrafts(): void {
+  try {
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith(PREFIX))
+      .forEach((k) => localStorage.removeItem(k))
+  } catch {
+    // تجاهل أخطاء التخزين
+  }
+}

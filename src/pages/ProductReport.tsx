@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Loader2, ArrowRight } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { fetchAll } from '../lib/fetchAll'
 import type { Database } from '../lib/database.types'
 
 type Product = Database['public']['Tables']['products']['Row']
@@ -24,7 +25,7 @@ export default function ProductReport() {
     Promise.all([
       supabase.from('products').select('*').eq('id', id).single(),
       supabase.from('inventory').select('quantity, warehouses(name)').eq('product_id', id),
-      supabase.from('sales_invoice_items').select('*, sales_invoices(invoice_number, created_at)').eq('product_id', id),
+      fetchAll((from, to) => supabase.from('sales_invoice_items').select('*, sales_invoices(invoice_number, created_at)').eq('product_id', id).order('id').range(from, to)),
     ]).then(([p, inv, items]) => {
       if (cancelled) return
       if (p.data) setProduct(p.data)

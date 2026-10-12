@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Loader2, ArrowRight, AlertTriangle } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { fetchAll } from '../lib/fetchAll'
 import type { Database } from '../lib/database.types'
 
 type Warehouse = Database['public']['Tables']['warehouses']['Row']
@@ -21,9 +22,9 @@ export default function WarehouseReport() {
 
     Promise.all([
       supabase.from('warehouses').select('*').eq('id', id).single(),
-      supabase.from('inventory').select('quantity, products(part_number, name, min_stock_alert)').eq('warehouse_id', id),
-      supabase.from('sales_invoices').select('total_amount').eq('warehouse_id', id),
-      supabase.from('orders').select('total_cost').eq('warehouse_id', id),
+      fetchAll((from, to) => supabase.from('inventory').select('quantity, products(part_number, name, min_stock_alert)').eq('warehouse_id', id).order('product_id').range(from, to)),
+      fetchAll((from, to) => supabase.from('sales_invoices').select('total_amount').eq('warehouse_id', id).order('id').range(from, to)),
+      fetchAll((from, to) => supabase.from('orders').select('total_cost').eq('warehouse_id', id).order('id').range(from, to)),
     ]).then(([w, inv, sales, orders]) => {
       if (cancelled) return
       if (w.data) setWarehouse(w.data)

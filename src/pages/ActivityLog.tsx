@@ -8,6 +8,7 @@ type ActivityLog = Database['public']['Tables']['activity_log']['Row']
 export default function ActivityLogPage() {
   const [logs, setLogs] = useState<ActivityLog[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -24,20 +25,39 @@ export default function ActivityLogPage() {
     return () => { cancelled = true }
   }, [])
 
-  const markRead = async (id: string) => {
-    setLogs((prev) => prev.map((l) => (l.id === id ? { ...l, is_read: true } : l)))
-    await supabase.from('activity_log').update({ is_read: true }).eq('id', id)
+  // التحديث بيظهر فورًا على الشاشة، ولو فشل في قاعدة البيانات بنرجّع القائمة
+  // زي ما كانت ونوضّح السبب (بدل ما الشاشة تفضل تعرض نجاح وهمي)
+  const runOptimistic = async (
+    next: (prev: ActivityLog[]) => ActivityLog[],
+    action: () => PromiseLike<{ error: { message: string } | null }>
+  ) => {
+    setError('')
+    const snapshot = logs
+    setLogs(next)
+    const { error } = await action()
+    if (error) {
+      setLogs(snapshot)
+      setError(`تعذر تنفيذ العملية: ${error.message}`)
+    }
   }
 
-  const markAllRead = async () => {
-    setLogs((prev) => prev.map((l) => ({ ...l, is_read: true })))
-    await supabase.from('activity_log').update({ is_read: true }).eq('is_read', false)
-  }
+  const markRead = (id: string) =>
+    runOptimistic(
+      (prev) => prev.map((l) => (l.id === id ? { ...l, is_read: true } : l)),
+      () => supabase.from('activity_log').update({ is_read: true }).eq('id', id)
+    )
 
-  const handleDelete = async (id: string) => {
-    setLogs((prev) => prev.filter((l) => l.id !== id))
-    await supabase.from('activity_log').delete().eq('id', id)
-  }
+  const markAllRead = () =>
+    runOptimistic(
+      (prev) => prev.map((l) => ({ ...l, is_read: true })),
+      () => supabase.from('activity_log').update({ is_read: true }).eq('is_read', false)
+    )
+
+  const handleDelete = (id: string) =>
+    runOptimistic(
+      (prev) => prev.filter((l) => l.id !== id),
+      () => supabase.from('activity_log').delete().eq('id', id)
+    )
 
   const unreadCount = logs.filter((l) => !l.is_read).length
 
@@ -55,6 +75,8 @@ export default function ActivityLogPage() {
           </button>
         )}
       </div>
+
+      {error && <p className="text-red-600 text-sm mb-3">{error}</p>}
 
       <div className="card overflow-hidden">
         {loading ? (

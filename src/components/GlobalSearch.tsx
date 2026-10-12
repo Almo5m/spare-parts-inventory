@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Search, Loader2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
+import { escapeLike } from '../lib/escapeLike'
 
 interface SearchResult {
   type: 'صنف' | 'عميل' | 'فاتورة بيع' | 'طلبية'
@@ -36,7 +37,7 @@ export default function GlobalSearch() {
 
     const timeout = setTimeout(async () => {
       setLoading(true)
-      const term = `%${query.trim()}%`
+      const term = `%${escapeLike(query.trim())}%`
 
       const [productsByName, productsByPart, productsByBarcode, customers, sales, orders] = await Promise.all([
         supabase.from('products').select('id, name, part_number').ilike('name', term).limit(5),

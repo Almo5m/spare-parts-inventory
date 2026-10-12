@@ -6,6 +6,7 @@ import {
   ClipboardList, Undo2, Settings as SettingsIcon, BarChart3, LogOut, Wrench, Menu, X, History,
 } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { clearAllDrafts } from '../lib/draft'
 import { useAuth } from '../context/useAuth'
 import NotificationBell from './NotificationBell'
 import GlobalSearch from './GlobalSearch'
@@ -31,6 +32,7 @@ export default function Layout() {
   const { profile } = useAuth()
 
   const handleLogout = async () => {
+    clearAllDrafts()
     await supabase.auth.signOut()
   }
 

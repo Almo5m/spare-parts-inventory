@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Loader2, FileSpreadsheet, BarChart3, Lightbulb } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { fetchAll } from '../lib/fetchAll'
 import { exportMultiSheetExcel } from '../lib/exportExcel'
 import { exportWarehouseInventory } from '../lib/exportInventory'
 import { getPeriodRange, type PeriodType } from '../lib/dateRanges'
@@ -30,8 +31,6 @@ export default function Reports() {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [exportingWarehouseId, setExportingWarehouseId] = useState<string | null>(null)
 
-  const range = getPeriodRange(period, customFrom, customTo)
-
   useEffect(() => {
     supabase.from('warehouses').select('*').order('created_at').then(({ data }) => {
       if (data) setWarehouses(data)
@@ -40,6 +39,7 @@ export default function Reports() {
 
   useEffect(() => {
     let cancelled = false
+    const range = getPeriodRange(period, customFrom, customTo)
     setLoading(true)
 
     async function load() {
@@ -47,11 +47,12 @@ export default function Reports() {
       const toIso = range.to.toISOString()
 
       if (tab === 'sales') {
-        const { data } = await supabase
+        const { data } = await fetchAll((from, to) => supabase
           .from('sales_invoices')
           .select('*, customers(name)')
           .gte('created_at', fromIso).lte('created_at', toIso)
-          .order('created_at', { ascending: false })
+          .order('created_at', { ascending: false }).order('id')
+          .range(from, to))
         const list = data ?? []
         const total = list.reduce((s, i) => s + i.total_amount, 0)
         setSummary([
@@ -68,10 +69,12 @@ export default function Reports() {
       }
 
       if (tab === 'profit') {
-        const { data: items } = await supabase
+        const { data: items } = await fetchAll((from, to) => supabase
           .from('sales_invoice_items')
           .select('*, sales_invoices!inner(id, created_at, invoice_number)')
           .gte('sales_invoices.created_at', fromIso).lte('sales_invoices.created_at', toIso)
+          .order('id')
+          .range(from, to))
 
         const list = items ?? []
         let totalProfit = 0
@@ -107,11 +110,12 @@ export default function Reports() {
       }
 
       if (tab === 'orders') {
-        const { data } = await supabase
+        const { data } = await fetchAll((from, to) => supabase
           .from('orders')
           .select('*, warehouses(name)')
           .gte('created_at', fromIso).lte('created_at', toIso)
-          .order('created_at', { ascending: false })
+          .order('created_at', { ascending: false }).order('id')
+          .range(from, to))
         const list = data ?? []
         const total = list.reduce((s, o) => s + o.total_cost, 0)
         setSummary([
@@ -128,9 +132,11 @@ export default function Reports() {
       }
 
       if (tab === 'inventory') {
-        const { data } = await supabase
+        const { data } = await fetchAll((from, to) => supabase
           .from('inventory')
           .select('product_id, quantity, products(part_number, name), warehouses(name)')
+          .order('product_id').order('warehouse_id')
+          .range(from, to))
         const list = data ?? []
         setSummary([{ label: 'عدد سجلات المخزون', value: String(list.length) }])
         setRows(list.map((r) => {
@@ -147,7 +153,7 @@ export default function Reports() {
       }
 
       if (tab === 'customers') {
-        const { data } = await supabase.from('customers').select('*').order('name')
+        const { data } = await fetchAll((from, to) => supabase.from('customers').select('*').order('name').order('id').range(from, to))
         const list = data ?? []
         setSummary([{ label: 'عدد العملاء', value: String(list.length) }])
         setRows(list.map((c) => ({
@@ -157,7 +163,7 @@ export default function Reports() {
       }
 
       if (tab === 'debts') {
-        const { data } = await supabase.from('customers').select('*').gt('balance', 0).order('balance', { ascending: false })
+        const { data } = await fetchAll((from, to) => supabase.from('customers').select('*').gt('balance', 0).order('balance', { ascending: false }).order('id').range(from, to))
         const list = data ?? []
         const total = list.reduce((s, c) => s + c.balance, 0)
         setSummary([
@@ -169,12 +175,14 @@ export default function Reports() {
       }
 
       if (tab === 'returns') {
-        const { data: salesReturns } = await supabase
+        const { data: salesReturns } = await fetchAll((from, to) => supabase
           .from('sales_returns').select('*, sales_invoices(invoice_number)')
           .gte('created_at', fromIso).lte('created_at', toIso)
-        const { data: orderReturns } = await supabase
+          .order('id').range(from, to))
+        const { data: orderReturns } = await fetchAll((from, to) => supabase
           .from('order_returns').select('*, orders(order_number)')
           .gte('created_at', fromIso).lte('created_at', toIso)
+          .order('id').range(from, to))
 
         const list1 = salesReturns ?? []
         const list2 = orderReturns ?? []
@@ -205,10 +213,11 @@ export default function Reports() {
       }
 
       if (tab === 'stocktake') {
-        const { data } = await supabase
+        const { data } = await fetchAll((from, to) => supabase
           .from('stocktakes').select('*, warehouses(name)')
           .gte('created_at', fromIso).lte('created_at', toIso)
-          .order('created_at', { ascending: false })
+          .order('created_at', { ascending: false }).order('id')
+          .range(from, to))
         const list = data ?? []
         setSummary([{ label: 'عدد عمليات الجرد', value: String(list.length) }])
         setRows(list.map((s) => ({

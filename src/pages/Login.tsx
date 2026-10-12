@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Loader2, Wrench, Lock, User } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { normalizeUsername } from '../lib/authRules'
 
 export default function Login() {
   const [username, setUsername] = useState('')
@@ -13,7 +14,8 @@ export default function Login() {
     setLoading(true)
     setError('')
 
-    const email = `${username}@warehouse.local`
+    // نفس تنظيف الاسم اللي بيتحفظ بيه وقت الإنشاء (مسافات + حروف صغيرة)
+    const email = `${normalizeUsername(username)}@warehouse.local`
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
 
     if (error) {

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Loader2, TrendingUp, TrendingDown, Users, Package, DollarSign, ShoppingBag } from 'lucide-react'
+import { Loader2, Users, Package } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { supabase } from '../lib/supabaseClient'
+import { fetchAll } from '../lib/fetchAll'
 import { getPeriodRange, periodLabels, type PeriodType } from '../lib/dateRanges'
 import PeriodSelector from '../components/PeriodSelector'
 
@@ -39,10 +40,9 @@ export default function Dashboard() {
   const [latestInvoices, setLatestInvoices] = useState<LatestInvoice[]>([])
   const [chartData, setChartData] = useState<ChartPoint[]>([])
 
-  const range = getPeriodRange(period, customFrom, customTo)
-
   useEffect(() => {
     let cancelled = false
+    const range = getPeriodRange(period, customFrom, customTo)
 
     async function loadStats() {
       setLoading(true)
@@ -56,16 +56,17 @@ export default function Dashboard() {
         salesRes, ordersRes, saleItemsRes,
         customersRes, productsRes, warehousesRes,
       ] = await Promise.all([
-        supabase.from('sales_invoices').select('*')
+        fetchAll((from, to) => supabase.from('sales_invoices').select('*')
           .gte('created_at', fromIso).lte('created_at', toIso)
-          .order('created_at', { ascending: false }),
-        supabase.from('orders').select('*')
+          .order('created_at', { ascending: false }).order('id').range(from, to)),
+        fetchAll((from, to) => supabase.from('orders').select('*')
           .gte('created_at', fromIso).lte('created_at', toIso)
-          .order('created_at', { ascending: false }),
-        supabase.from('sales_invoice_items').select('*, sales_invoices!inner(created_at)')
-          .gte('sales_invoices.created_at', fromIso).lte('sales_invoices.created_at', toIso),
-        supabase.from('customers').select('id, name'),
-        supabase.from('products').select('id, name'),
+          .order('created_at', { ascending: false }).order('id').range(from, to)),
+        fetchAll((from, to) => supabase.from('sales_invoice_items').select('*, sales_invoices!inner(created_at)')
+          .gte('sales_invoices.created_at', fromIso).lte('sales_invoices.created_at', toIso)
+          .order('id').range(from, to)),
+        fetchAll((from, to) => supabase.from('customers').select('id, name').order('id').range(from, to)),
+        fetchAll((from, to) => supabase.from('products').select('id, name').order('id').range(from, to)),
         supabase.from('warehouses').select('id, name'),
       ])
 
@@ -188,43 +189,31 @@ export default function Dashboard() {
         </div>
       ) : (
       <>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-        <div className="card p-4 flex items-center gap-3">
-          <div className="w-10 h-10 shrink-0 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600">
-            <TrendingUp size={18} />
-          </div>
-          <div className="min-w-0">
-            <p className="text-xs text-slate-500">المبيعات</p>
-            <p className="font-mono-data font-bold text-navy-900 truncate">{totalSales.toFixed(0)}</p>
-          </div>
-        </div>
-        <div className="card p-4 flex items-center gap-3">
-          <div className="w-10 h-10 shrink-0 rounded-xl bg-accent/10 flex items-center justify-center text-accent-dark">
-            <DollarSign size={18} />
-          </div>
-          <div className="min-w-0">
-            <p className="text-xs text-slate-500">الأرباح ({profitMargin.toFixed(0)}%)</p>
-            <p className="font-mono-data font-bold text-navy-900 truncate">{totalProfit.toFixed(0)}</p>
+      {/* الربح هو الرقم الأهم، فبياخد مساحة وتباين أكبر؛ باقي الأرقام أهدى في قائمة واحدة */}
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
+        <div className="md:col-span-3 rounded-2xl bg-navy-900 text-white p-6 flex flex-col justify-between min-h-[9.5rem]">
+          <p className="text-sm text-white/65">الأرباح الدقيقة — {periodLabels[period]}</p>
+          <div>
+            <p className="font-mono-data font-bold text-4xl md:text-5xl leading-none">{totalProfit.toFixed(0)}</p>
+            <p className="text-sm text-white/65 mt-3">
+              هامش {profitMargin.toFixed(0)}% من مبيعات {totalSales.toFixed(0)}
+            </p>
           </div>
         </div>
-        <div className="card p-4 flex items-center gap-3">
-          <div className="w-10 h-10 shrink-0 rounded-xl bg-red-50 flex items-center justify-center text-red-600">
-            <TrendingDown size={18} />
+        <dl className="md:col-span-2 card px-5 py-2 divide-y divide-border-soft self-stretch flex flex-col justify-center">
+          <div className="flex items-center justify-between py-3">
+            <dt className="text-sm text-slate-500">المبيعات</dt>
+            <dd className="font-mono-data font-bold text-navy-900">{totalSales.toFixed(0)}</dd>
           </div>
-          <div className="min-w-0">
-            <p className="text-xs text-slate-500">تكلفة الطلبيات</p>
-            <p className="font-mono-data font-bold text-navy-900 truncate">{totalOrdersCost.toFixed(0)}</p>
+          <div className="flex items-center justify-between py-3">
+            <dt className="text-sm text-slate-500">تكلفة الطلبيات</dt>
+            <dd className="font-mono-data font-bold text-navy-900">{totalOrdersCost.toFixed(0)}</dd>
           </div>
-        </div>
-        <div className="card p-4 flex items-center gap-3">
-          <div className="w-10 h-10 shrink-0 rounded-xl bg-navy-900/5 flex items-center justify-center text-navy-900">
-            <ShoppingBag size={18} />
+          <div className="flex items-center justify-between py-3">
+            <dt className="text-sm text-slate-500">عدد الفواتير</dt>
+            <dd className="font-mono-data font-bold text-navy-900">{invoicesCount}</dd>
           </div>
-          <div className="min-w-0">
-            <p className="text-xs text-slate-500">عدد الفواتير</p>
-            <p className="font-mono-data font-bold text-navy-900 truncate">{invoicesCount}</p>
-          </div>
-        </div>
+        </dl>
       </div>
 
       <p className="text-xs text-emerald-600 mb-4">
