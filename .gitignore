@@ -26,3 +26,18 @@ dist-ssr
 dev-dist
 
 supabase/.temp/
+
+# Python virtual environment
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Environment variables and secrets
+.env
+.env.*
+
+# Keep example environment files
+!.env.example

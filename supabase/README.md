@@ -1,48 +1,51 @@
 # مجلد Supabase
 
-هنا كل حاجة تخص الباك إند، عشان لو حصلت مشكلة أو اتنقل المشروع نعرف نبني كل حاجة من الصفر.
+كل حاجة تخص الباك إند هنا، عشان لو حصلت مشكلة أو اتنقل المشروع نعرف نبني كل حاجة من الصفر.
 
 ```
 supabase/
+├── migrations/               تعريفات القاعدة الفعلية + التحسينات (انظر الجدول تحت)
 ├── functions/manage-users/   الـ Edge Function (إضافة مستخدم، تغيير username، إعادة تعيين كلمة مرور)
-├── export/                   سكريبت يطلّع كل التعريفات الحقيقية من قاعدة البيانات الشغالة
-├── checks/                   فحوصات أمان للقراءة فقط (RLS، الصلاحيات، حسابات يتيمة)
-├── migrations/               ملفات الـ migrations (هتتملي من الخطوة 1 تحت)
+├── tests/db_scenarios.py     اختبارات حقيقية لقاعدة البيانات (Postgres مؤقت، مفيش اتصال ببياناتك)
+├── export/                   سكريبت يطلّع التعريفات من قاعدة شغّالة (اتعمل بيه الـ baseline)
+├── checks/                   فحوصات أمان للقراءة فقط
 └── SCHEMA-REFERENCE.md       مرجع الجداول والدوال، مولّد من ملف الأنواع (مرجع بس)
 ```
 
-## مهم تعرفه
-دوال الـ SQL (`create_sale_invoice`، `void_order`، `apply_stocktake`...) وسياسات RLS والـ triggers **متعملة مباشرة في لوحة Supabase ومش متسجلة في الريبو لحد دلوقتي**. فمجلد `migrations/` فاضي عمدًا: مش هنألّف تعريفات من عندنا، لازم تتسحب من القاعدة الفعلية.
+## الـ migrations
 
-## الخطوة 1: سحب الـ migrations الحقيقية (مرة واحدة، 5 دقايق)
-1. Supabase Dashboard ← **SQL Editor** ← New query.
-2. الصق محتوى `export/export-definitions.sql` واضغط **Run**.
-3. اضغط **Download CSV** (أو انسخ عمود `definition`).
-4. ابعتلي الناتج وأنا أحوّله لملفات مرتبة جوه `migrations/` (أو احفظه كـ `migrations/00000000000000_baseline.sql`).
+| الملف | إيه هو | يتنفذ على القاعدة الشغّالة؟ |
+|---|---|---|
+| `00000000000000_baseline.sql` | **تسجيل** للوضع الفعلي وقت التصدير (30 جدول، 32 سياسة، 20 دالة). اتولّد من تصدير قاعدتك الحقيقية. | **لا!** القاعدة فيها كل ده بالفعل. ده بس لو بنيت مشروع جديد من الصفر. |
+| `20261012000001_harden_privileges.sql` | سحب صلاحيات anon (كان يقدر ينفّذ 3 دوال من غير تسجيل دخول) وTRUNCATE | نعم |
+| `20261012000002_add_missing_indexes.sql` | فهارس ناقصة (تواريخ وأعمدة الربط) | نعم |
+| `20261012000003_add_non_negative_checks.sql` | قيود "مفيش أرقام سالبة" (NOT VALID) | نعم، **بعد** فحص الصفوف القديمة (الاستعلامات جواه) |
+| `20261012000004_validate_rpc_inputs.sql` | تحقق من المدخلات داخل `create_sale_invoice` و`create_order` و`apply_stocktake` + قيد على معامل التحويل | نعم |
 
-بديل بالـ CLI لو مثبّته:
+### إزاي تطبّقها على القاعدة الشغّالة
+1. اعمل **نسخة احتياطية** الأول (من الإعدادات في الموقع، وتأكد من أرقام الصفوف).
+2. Supabase Dashboard ← SQL Editor، وشغّل الملفات **واحد واحد** بالترتيب: `…0001` ثم `…0002` ثم `…0004` ثم `…0003`.
+3. بعد كل واحد جرّب الموقع: بيع، طلبية، مرتجع، جرد، إلغاء.
+4. لو رجعت صفر صفوف من استعلامات الفحص في `…0003`، شغّل أسطر `validate constraint` اللي في آخره.
+
+### بعد التطبيق: فحص إن القاعدة بقت زي ما المفروض
+شغّل `checks/01-security-audit.sql`. الاستعلام 5 (الدوال) لازم يبقى `anon_can_execute = false` للكل، والاستعلام 6 (صلاحيات anon على الجداول) لازم يرجّع صفر صفوف.
+
+## الاختبارات
 ```bash
-supabase login
-supabase link --project-ref <PROJECT_REF>
-supabase db dump --schema public -f supabase/migrations/00000000000000_baseline.sql
+python -m pip install pgserver
+python supabase/tests/db_scenarios.py     # أو: npm run test:db
 ```
-
-## الخطوة 2: فحص الأمان
-شغّل استعلامات `checks/01-security-audit.sql` واحد واحد، وقارن بالنتيجة المتوقعة المكتوبة فوق كل استعلام. أي نتيجة مختلفة ابعتهالي.
-
-## الخطوة 3: جرّب إعادة البناء
-- أنشئ مشروع Supabase تجريبي، شغّل `migrations/` عليه بالترتيب، واتأكد إن التطبيق شغال عليه.
-- جرّب نسخة احتياطية كاملة (من الإعدادات) واستعدها على المشروع التجريبي، وقارن عدد الصفوف.
+بتبني قاعدة Postgres مؤقتة على جهازك، وتطبّق كل الـ migrations، وتجرّب: ثغرة anon، منطق FIFO والأرصدة والإلغاء، المرتجعات والدفعات، وكل المدخلات الغلط. لازم تطلع `كل الاختبارات نجحت`. شغّلها بعد أي migration جديد.
+حدودها: الأدوار (anon/authenticated) و`auth.uid()` متقلَّدين بشكل مبسّط، فهي مش بديل لتجربة على مشروع Supabase تجريبي.
 
 ## نشر الـ Edge Function
-Dashboard ← Edge Functions ← `manage-users` ← الصق `functions/manage-users/index.ts` ← Deploy.
-(أو: `supabase functions deploy manage-users`). لازم تعيد النشر كل ما الملف يتغيّر. خلّي **Verify JWT** مفعّل.
-متغيرات `SUPABASE_URL` و`SUPABASE_ANON_KEY` و`SUPABASE_SERVICE_ROLE_KEY` بتتوفر للدالة تلقائيًا من Supabase.
+Dashboard ← Edge Functions ← `manage-users` ← الصق `functions/manage-users/index.ts` ← Deploy. لازم تعيد النشر كل ما الملف يتغيّر. خلّي **Verify JWT** مفعّل.
+متغيرات `SUPABASE_URL` و`SUPABASE_ANON_KEY` و`SUPABASE_SERVICE_ROLE_KEY` بتتوفر للدالة تلقائيًا.
 
 ## قواعد لأي migration جديد
 - اسم الملف: `YYYYMMDDHHMMSS_وصف_قصير.sql` (بالإنجليزي).
 - أي تعديل على الجداول أو الدوال يتسجل هنا **في نفس اللحظة** اللي بيتنفذ فيها على القاعدة.
-- بعد تعديل الجداول: ولّد الأنواع من جديد
-  `npx supabase gen types typescript --project-id "<PROJECT_ID>" --schema public > src/lib/database.types.ts`
-  (في PowerShell الأمر `>` بيكتب الملف UTF-16، فاستخدم CMD أو `| Out-File -Encoding utf8`).
+- شغّل `python supabase/tests/db_scenarios.py` قبل ما تنفّذه على القاعدة الحقيقية.
+- بعد تعديل الجداول ولّد الأنواع من جديد: `npx supabase gen types typescript --project-id "<PROJECT_ID>" --schema public > src/lib/database.types.ts` (في PowerShell الأمر `>` بيكتب UTF-16، فاستخدم CMD أو `| Out-File -Encoding utf8`).
 - ممنوع أي سر (مفاتيح، باسوردات) يتسجل في الـ migrations.

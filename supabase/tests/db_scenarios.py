@@ -1,0 +1,594 @@
+
+#!/usr/bin/env python3
+"""
+اختبارات قاعدة البيانات: بتشغّل ملفات supabase/migrations على PostgreSQL مؤقت،
+ومش بتتصل بقاعدة بيانات Supabase الحقيقية.
+
+التشغيل:
+    python -m pip install pgserver
+    python supabase/tests/db_scenarios.py
+
+بتطبع PASS/FAIL لكل حالة، وبترجع كود خروج 1 لو أي اختبار فشل.
+"""
+
+import os
+import pathlib
+import subprocess
+import sys
+import tempfile
+
+# الطباعة بالعربي على ويندوز
+for stream in (sys.stdout, sys.stderr):
+    try:
+        stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
+try:
+    import pgserver
+except ImportError:
+    sys.exit(
+        "محتاج تثبيت الأداة بالأمر: "
+        "python -m pip install pgserver"
+    )
+
+MIGRATIONS = pathlib.Path(__file__).resolve().parent.parent / "migrations"
+
+USER = "11111111-1111-1111-1111-111111111111"
+
+WH, PRODUCT, CUSTOMER = (
+    "22222222-2222-2222-2222-222222222222",
+    "33333333-3333-3333-3333-333333333333",
+    "44444444-4444-4444-4444-444444444444",
+)
+
+STUBS = """
+create role anon nologin;
+create role authenticated nologin;
+create role service_role nologin;
+
+create schema auth;
+
+create table auth.users (
+    id uuid primary key default gen_random_uuid(),
+    email text
+);
+
+create function auth.uid()
+returns uuid
+language sql stable
+as $$
+    select nullif(
+        current_setting('request.jwt.claim.sub', true), ''
+    )::uuid
+$$;
+
+grant usage on schema public, auth
+to anon, authenticated, service_role;
+
+alter default privileges in schema public
+grant all on tables to anon, authenticated, service_role;
+
+alter default privileges in schema public
+grant execute on functions to anon, authenticated, service_role;
+"""
+
+SEED = f"""
+insert into auth.users(id, email)
+values ('{USER}', 'u@warehouse.local');
+
+insert into public.users(id, full_name, username, role)
+values ('{USER}', 'Owner', 'owner1', 'owner');
+
+insert into public.company_settings(id) values (true);
+
+insert into public.warehouses(id, name, is_default)
+values ('{WH}', 'Main', true);
+
+insert into public.products(id, part_number, name, base_unit)
+values ('{PRODUCT}', 'P-1', 'Brake pad', 'قطعة');
+
+insert into public.customers(id, name)
+values ('{CUSTOMER}', 'Ali');
+"""
+
+AS_USER = (
+    f"set role authenticated; "
+    f"select set_config('request.jwt.claim.sub','{USER}',false);\n"
+)
+
+
+class Db:
+    def __init__(self, files):
+        self.srv = pgserver.get_server(
+            tempfile.mkdtemp(),
+            cleanup_mode="delete",
+        )
+
+        bin_dir = pathlib.Path(pgserver.__file__).parent / "pginstall" / "bin"
+
+        self.psql = next(
+            (
+                p
+                for p in (bin_dir / "psql.exe", bin_dir / "psql")
+                if p.exists()
+            ),
+            bin_dir / "psql",
+        )
+
+        self.last_stdout = ""
+        self.last_stderr = ""
+
+        self.run(STUBS, strict=True)
+
+        for filename in files:
+            sql = (MIGRATIONS / filename).read_text(encoding="utf-8")
+            self.run(sql, strict=True)
+
+    def run(self, sql, strict=False):
+        """ترجع (نجح؟، النص). في الوضع strict تتوقف عند أول خطأ."""
+        prefix = "\\set ON_ERROR_STOP on\n" if strict else ""
+
+        p = subprocess.run(
+            [
+                str(self.psql),
+                "-X",
+                "-A",
+                "-t",
+                "-d",
+                self.srv.get_uri(),
+                "-f",
+                "-",
+            ],
+            input=prefix + sql,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env={
+                **os.environ,
+                "PGCLIENTENCODING": "UTF8",
+            },
+        )
+
+        # نفصل نتيجة SQL عن التحذيرات التي تظهر في stderr.
+        self.last_stdout = p.stdout.strip()
+        self.last_stderr = p.stderr.strip()
+
+        output = "\n".join(
+            part
+            for part in (self.last_stdout, self.last_stderr)
+            if part
+        )
+
+        ok = p.returncode == 0 and "ERROR:" not in output
+
+        if strict and not ok:
+            sys.exit(f"فشل تنفيذ SQL:\n{output[:800]}")
+
+        return ok, output
+
+    def as_user(self, sql):
+        return self.run(AS_USER + sql)
+
+    def value(self, sql):
+        """تقرأ نتيجة SQL من stdout فقط، وتتجاهل تحذيرات stderr."""
+        self.run(sql)
+
+        if not self.last_stdout:
+            return ""
+
+        return self.last_stdout.splitlines()[-1].strip()
+
+
+failures = 0
+
+
+def check(name, cond, detail=""):
+    global failures
+
+    print(
+        ("PASS  " if cond else "FAIL  ")
+        + name
+        + ("" if cond else f"   <-- {detail}")
+    )
+
+    failures += 0 if cond else 1
+
+
+def order_items(qty, cost, cf=1):
+    return (
+        f"jsonb_build_array(jsonb_build_object("
+        f"'product_id','{PRODUCT}',"
+        f"'unit_name','قطعة',"
+        f"'conversion_factor',{cf},"
+        f"'quantity',{qty},"
+        f"'unit_cost',{cost},"
+        f"'sale_price',150))"
+    )
+
+
+def sale_items(qty, price, cf=1):
+    return (
+        f"jsonb_build_array(jsonb_build_object("
+        f"'product_id','{PRODUCT}',"
+        f"'unit_name','قطعة',"
+        f"'conversion_factor',{cf},"
+        f"'quantity',{qty},"
+        f"'unit_price',{price}))"
+    )
+
+
+ALL = (
+    ["00000000000000_baseline.sql"]
+    + sorted(f.name for f in MIGRATIONS.glob("2*.sql"))
+)
+
+
+# ---------------------------------------------------------------
+# الأمان
+print("== الأمان (anon بدون تسجيل دخول) ==")
+
+before = Db(["00000000000000_baseline.sql"])
+
+ok, _ = before.run("set role anon; select public.notify('fake');")
+
+check(
+    "[قبل التحصين] anon كان يقدر يكتب إشعار مزيف (الثغرة الأصلية)",
+    ok,
+)
+
+db = Db(ALL)
+
+security_tests = [
+    ("notify", "select public.notify('x')"),
+    ("log_activity", "select public.log_activity('x')"),
+    (
+        "cleanup_old_notifications",
+        "select public.cleanup_old_notifications()",
+    ),
+    (
+        "create_sale_invoice",
+        f"select public.create_sale_invoice(null,'{WH}','[]'::jsonb,0,0)",
+    ),
+    ("قراءة products", "select * from public.products"),
+    (
+        "كتابة products",
+        "insert into public.products(part_number,name,base_unit) "
+        "values ('x','x','x')",
+    ),
+]
+
+for label, sql in security_tests:
+    ok, _ = db.run("set role anon; " + sql)
+    check(f"[بعد التحصين] anon ممنوع: {label}", not ok)
+
+ok, _ = db.run("set role authenticated; truncate public.products;")
+
+check(
+    "[بعد التحصين] authenticated ممنوع TRUNCATE",
+    not ok,
+)
+
+
+# ---------------------------------------------------------------
+# منطق الأعمال
+print("== العمليات الأساسية (FIFO، الأرصدة، الإلغاء) ==")
+
+db.run(SEED, strict=True)
+
+db.as_user(
+    f"select public.create_order('{WH}','o1',"
+    f"{order_items(10, 100)},0);"
+)
+
+db.as_user(
+    f"select public.create_order('{WH}','o2',"
+    f"{order_items(10, 120)},0);"
+)
+
+check(
+    "المخزون بعد طلبيتين = 20",
+    db.value("select quantity from public.inventory").startswith("20"),
+)
+
+ok, _ = db.as_user(
+    f"select public.create_sale_invoice('{CUSTOMER}','{WH}',"
+    f"{sale_items(15, 200)},1000,0);"
+)
+
+check("بيع 15 قطعة مقبول", ok)
+
+check(
+    "التكلفة الفعلية FIFO = 10×100 + 5×120 = 1600",
+    db.value(
+        "select sum(actual_cost) from public.sales_invoice_items"
+    ) == "1600.00",
+)
+
+check(
+    "رصيد العميل = 3000 - 1000 = 2000",
+    db.value("select balance from public.customers") == "2000.00",
+)
+
+check(
+    "دفعات متبقية: صفر و5",
+    db.value(
+        "select string_agg(quantity_remaining::text, ',' "
+        "order by created_at) from public.inventory_lots"
+    ) == "0.0000,5.0000",
+)
+
+ok, _ = db.as_user(
+    f"select public.create_sale_invoice('{CUSTOMER}','{WH}',"
+    f"{sale_items(50, 200)},0,0);"
+)
+
+check("بيع كمية أكبر من المتاح مرفوض", not ok)
+
+ok, _ = db.as_user(
+    "select public.void_order(id) from public.orders "
+    "where order_number like '%1';"
+)
+
+check("إلغاء طلبية اتباع منها مرفوض", not ok)
+
+db.as_user(
+    "select public.void_sale_invoice(id) from public.sales_invoices;"
+)
+
+check(
+    "إلغاء الفاتورة بيرجّع المخزون والدفعات والرصيد",
+    db.value(
+        "select quantity from public.inventory"
+    ).startswith("20")
+    and db.value(
+        "select balance from public.customers"
+    ) == "0.00"
+    and db.value(
+        "select string_agg(quantity_remaining::text, ',' "
+        "order by created_at) from public.inventory_lots"
+    ) == "10.0000,10.0000",
+)
+
+before_n = int(
+    db.value("select count(*) from public.notifications")
+)
+
+db.as_user(
+    "insert into public.products(part_number,name,base_unit) "
+    "values ('P-2','Filter','قطعة');"
+)
+
+check(
+    "الـ trigger لسه بيعمل إشعار بعد سحب الصلاحيات",
+    int(db.value("select count(*) from public.notifications")) > before_n,
+)
+
+
+# ---------------------------------------------------------------
+# مدخلات غلط
+print("== مدخلات غلط مباشرة على الدوال (لازم تترفض) ==")
+
+bad = {
+    "خصم أكبر من إجمالي الفاتورة": (
+        f"select public.create_sale_invoice('{CUSTOMER}','{WH}',"
+        f"{sale_items(2, 200)},0,5000);"
+    ),
+    "خصم سالب": (
+        f"select public.create_sale_invoice('{CUSTOMER}','{WH}',"
+        f"{sale_items(2, 200)},0,-50);"
+    ),
+    "معامل تحويل صفر في فاتورة": (
+        f"select public.create_sale_invoice('{CUSTOMER}','{WH}',"
+        f"{sale_items(2, 200, 0)},0,0);"
+    ),
+    "صنف سالب جنب صنف عادي (حقن مخزون)": (
+        f"select public.create_sale_invoice('{CUSTOMER}','{WH}',"
+        f"jsonb_build_array("
+        f"jsonb_build_object('product_id','{PRODUCT}',"
+        f"'unit_name','قطعة','conversion_factor',1,"
+        f"'quantity',3,'unit_price',200),"
+        f"jsonb_build_object('product_id','{PRODUCT}',"
+        f"'unit_name','قطعة','conversion_factor',1,"
+        f"'quantity',-2,'unit_price',200)),0,0);"
+    ),
+    "مدفوع أكبر من الإجمالي": (
+        f"select public.create_sale_invoice('{CUSTOMER}','{WH}',"
+        f"{sale_items(1, 200)},999,0);"
+    ),
+    "طلبية بخصم أكبر من الإجمالي": (
+        f"select public.create_order('{WH}','x',"
+        f"{order_items(1, 100)},500);"
+    ),
+    "طلبية بتكلفة سالبة": (
+        f"select public.create_order('{WH}','x',"
+        f"{order_items(1, -100)},0);"
+    ),
+    "جرد بكمية سالبة": (
+        f"select public.apply_stocktake('{WH}','t',"
+        f"jsonb_build_array(jsonb_build_object("
+        f"'product_id','{PRODUCT}',"
+        f"'counted_quantity',-3)));"
+    ),
+}
+
+stock_before = db.value("select quantity from public.inventory")
+
+for name, sql in bad.items():
+    ok, _ = db.as_user(sql)
+    check(f"مرفوض: {name}", not ok)
+
+check(
+    "المخزون محدش لمسه بعد كل المحاولات الغلط",
+    db.value("select quantity from public.inventory") == stock_before,
+)
+
+ok, _ = db.run(
+    f"insert into public.product_units"
+    f"(product_id,unit_name,conversion_factor) "
+    f"values ('{PRODUCT}','x',0);"
+)
+
+check("مرفوض: وحدة قياس بمعامل تحويل صفر", not ok)
+
+
+# ---------------------------------------------------------------
+# حالات سليمة
+print("== حالات سليمة لسه شغالة بعد التحقق الجديد ==")
+
+ok, _ = db.as_user(
+    f"select public.apply_stocktake('{WH}','t',"
+    f"jsonb_build_array(jsonb_build_object("
+    f"'product_id','{PRODUCT}','counted_quantity',12)));"
+)
+
+check(
+    "جرد سليم",
+    ok and db.value(
+        "select quantity from public.inventory"
+    ).startswith("12"),
+)
+
+db.run(
+    f"insert into public.product_units"
+    f"(product_id,unit_name,conversion_factor) "
+    f"values ('{PRODUCT}','كرتونة',6);"
+)
+
+ok, _ = db.as_user(
+    f"select public.create_sale_invoice('{CUSTOMER}','{WH}',"
+    f"{sale_items(1, 500, 6)},500,0);"
+)
+
+check(
+    "بيع بالكرتونة (1 كرتونة = 6 قطع) والمخزون بيتخصم 6",
+    ok and db.value(
+        "select quantity from public.inventory"
+    ).startswith("6"),
+)
+
+ok, _ = db.as_user(
+    f"select public.create_sale_invoice('{CUSTOMER}','{WH}',"
+    f"{sale_items(1, 100)},0,100);"
+)
+
+check(
+    "خصم يساوي الإجمالي بالظبط مقبول (فاتورة مجانية مقصودة)",
+    ok,
+)
+
+
+# ---------------------------------------------------------------
+# المرتجعات والدفعات
+print("== المرتجعات والدفعات (مع القيود الجديدة) ==")
+
+db2 = Db(ALL)
+db2.run(SEED, strict=True)
+
+db2.as_user(
+    f"select public.create_order('{WH}','o',"
+    f"{order_items(10, 100)},0);"
+)
+
+db2.as_user(
+    f"select public.create_sale_invoice('{CUSTOMER}','{WH}',"
+    f"{sale_items(4, 200)},0,0);"
+)
+
+check(
+    "بعد بيع 4 بدون دفع: رصيد العميل 800 والمخزون 6",
+    db2.value("select balance from public.customers") == "800.00"
+    and db2.value(
+        "select quantity from public.inventory"
+    ).startswith("6"),
+)
+
+ret_items = (
+    f"jsonb_build_array(jsonb_build_object("
+    f"'product_id','{PRODUCT}','unit_name','قطعة',"
+    f"'conversion_factor',1,'quantity',1,'unit_price',200))"
+)
+
+ok, msg = db2.as_user(
+    f"select public.create_sales_return("
+    f"(select id from public.sales_invoices),"
+    f"{ret_items},'مرتجع');"
+)
+
+check("مرتجع بيع 1 قطعة مقبول", ok, msg[-200:])
+
+check(
+    "بعد المرتجع: رصيد العميل 600 والمخزون 7",
+    db2.value("select balance from public.customers") == "600.00"
+    and db2.value(
+        "select quantity from public.inventory"
+    ).startswith("7"),
+)
+
+ok, msg = db2.as_user(
+    "select public.record_payment("
+    "'customer',(select id from public.customers),"
+    "'in',100,'دفعة');"
+)
+
+check(
+    "تحصيل 100 من العميل مقبول والرصيد يبقى 500",
+    ok and db2.value(
+        "select balance from public.customers"
+    ) == "500.00",
+    msg[-200:],
+)
+
+ok, _ = db2.as_user(
+    "select public.record_payment("
+    "'customer',(select id from public.customers),"
+    "'in',-5,'x');"
+)
+
+check("تحصيل بمبلغ سالب مرفوض", not ok)
+
+oret = (
+    f"jsonb_build_array(jsonb_build_object("
+    f"'product_id','{PRODUCT}','unit_name','قطعة',"
+    f"'conversion_factor',1,'quantity',2,'unit_cost',100))"
+)
+
+ok, msg = db2.as_user(
+    f"select public.create_order_return("
+    f"(select id from public.orders),"
+    f"{oret},'رجوع للمورد');"
+)
+
+check(
+    "مرتجع طلبية 2 قطعة مقبول والمخزون يبقى 5",
+    ok and db2.value(
+        "select quantity from public.inventory"
+    ).startswith("5"),
+    msg[-200:],
+)
+
+too_many_return_items = ret_items.replace(
+    "'quantity',1",
+    "'quantity',99",
+)
+
+ok, _ = db2.as_user(
+    f"select public.create_sales_return("
+    f"(select id from public.sales_invoices),"
+    f"{too_many_return_items},'x');"
+)
+
+check("مرتجع بيع أكبر من المباع مرفوض", not ok)
+
+
+# ---------------------------------------------------------------
+print()
+
+print(
+    "كل الاختبارات نجحت ✅"
+    if failures == 0
+    else f"{failures} اختبار فشل ❌"
+)
+
+sys.exit(1 if failures else 0)
