@@ -93,7 +93,13 @@ h1, h2, h3, .font-display {
 }
 
 /* ===== طباعة الفاتورة ===== */
+@page { size: A4; margin: 12mm; }
 @media print {
+  /* عشان لون ترويسة الجدول وخلفيات المربعات تطلع في الطباعة وملف الـ PDF */
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .print-area .table-scroll table { min-width: 0; }
+  .print-area thead { display: table-header-group; }
+  .print-area tr { break-inside: avoid; }
   body * { visibility: hidden; }
   .print-area, .print-area * { visibility: visible; }
   .print-area {
