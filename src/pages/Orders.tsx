@@ -3,6 +3,7 @@ import { Loader2, Trash2, Plus } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { nullableArg } from '../lib/rpcArgs'
 import { fetchAll } from '../lib/fetchAll'
+import { round2, lineTotal } from '../lib/money'
 import { loadDraft, saveDraft, clearDraft } from '../lib/draft'
 import { useAuth } from '../context/useAuth'
 import Select from '../components/Select'
@@ -147,9 +148,9 @@ export default function Orders() {
     setCart(cart.filter((_, i) => i !== index))
   }
 
-  const subtotal = cart.reduce((sum, item) => sum + item.quantity * item.unit_cost, 0)
-  const discountValue = Number(discount) || 0
-  const total = Math.max(subtotal - discountValue, 0)
+  const subtotal = round2(cart.reduce((sum, item) => sum + lineTotal(item.quantity, item.unit_cost), 0))
+  const discountValue = round2(Number(discount) || 0)
+  const total = round2(Math.max(subtotal - discountValue, 0))
 
   const resetForm = () => {
     setOrder(null)

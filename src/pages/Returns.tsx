@@ -12,6 +12,22 @@ type Order = Database['public']['Tables']['orders']['Row']
 type OrderItem = Database['public']['Tables']['order_items']['Row']
 type ProductUnit = Database['public']['Tables']['product_units']['Row']
 
+// الكمية المتاحة للإرجاع لكل سطر. المرتجعات السابقة بتتحسب لكل (صنف + وحدة) مع بعض،
+// وبتتوزّع على الأسطر بالترتيب، عشان نفس الصنف لو ظهر في سطرين مينقصش مرتين،
+// وعشان كرتونة وقطعة لنفس الصنف مايتحسبوش على بعض.
+function remainingByLine<T extends { product_id: string; unit_name: string; quantity: number }>(
+  items: T[],
+  returned: Record<string, number>
+): T[] {
+  const left = { ...returned }
+  return items.map((it) => {
+    const key = `${it.product_id}|${it.unit_name}`
+    const used = Math.min(left[key] ?? 0, it.quantity)
+    left[key] = (left[key] ?? 0) - used
+    return { ...it, quantity: it.quantity - used }
+  })
+}
+
 export default function Returns() {
   const [tab, setTab] = useState<'sale' | 'order'>('sale')
 
@@ -19,12 +35,14 @@ export default function Returns() {
   const [invoices, setInvoices] = useState<SaleInvoice[]>([])
   const [customerNames, setCustomerNames] = useState<Record<string, string>>({})
   const [selectedInvoiceId, setSelectedInvoiceId] = useState('')
+  const [invoiceSearch, setInvoiceSearch] = useState('')
   const [saleItems, setSaleItems] = useState<(SaleItem & { returnQty: string })[]>([])
 
   // ---------- مرتجع طلبية ----------
   const [orders, setOrders] = useState<Order[]>([])
   const [warehouseNames, setWarehouseNames] = useState<Record<string, string>>({})
   const [selectedOrderId, setSelectedOrderId] = useState('')
+  const [orderSearch, setOrderSearch] = useState('')
   const [orderItems, setOrderItems] = useState<(OrderItem & { returnQty: string })[]>([])
 
   const [productNames, setProductNames] = useState<Record<string, string>>({})
@@ -48,8 +66,8 @@ export default function Returns() {
   useEffect(() => {
     let cancelled = false
     Promise.all([
-      supabase.from('sales_invoices').select('*').order('created_at', { ascending: false }).limit(100),
-      supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(100),
+      supabase.from('sales_invoices').select('*').order('created_at', { ascending: false }).limit(500),
+      supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(500),
       fetchAll((from, to) => supabase.from('customers').select('id, name').order('id').range(from, to)),
       supabase.from('warehouses').select('id, name'),
       fetchAll((from, to) => supabase.from('products').select('id, name, base_unit').order('id').range(from, to)),
@@ -80,7 +98,7 @@ export default function Returns() {
       supabase.from('sales_invoice_items').select('*').eq('invoice_id', invoiceId),
       supabase
         .from('sales_return_items')
-        .select('product_id, quantity, sales_returns!inner(sales_invoice_id)')
+        .select('product_id, unit_name, quantity, sales_returns!inner(sales_invoice_id)')
         .eq('sales_returns.sales_invoice_id', invoiceId),
     ])
 
@@ -88,15 +106,12 @@ export default function Returns() {
     // الكمية اللي لسه متاحة يرجعها فعليًا بدل ما يفاجأ بالرفض
     const returnedMap: Record<string, number> = {}
     for (const r of pastReturns ?? []) {
-      returnedMap[r.product_id] = (returnedMap[r.product_id] ?? 0) + Number(r.quantity)
+      const key = `${r.product_id}|${r.unit_name}`
+      returnedMap[key] = (returnedMap[key] ?? 0) + Number(r.quantity)
     }
 
     setSaleItems(
-      (items ?? []).map((it) => ({
-        ...it,
-        quantity: it.quantity - (returnedMap[it.product_id] ?? 0),
-        returnQty: '0',
-      }))
+      remainingByLine(items ?? [], returnedMap).map((it) => ({ ...it, returnQty: '0' }))
     )
   }
 
@@ -110,21 +125,18 @@ export default function Returns() {
       supabase.from('order_items').select('*').eq('order_id', orderId),
       supabase
         .from('order_return_items')
-        .select('product_id, quantity, order_returns!inner(order_id)')
+        .select('product_id, unit_name, quantity, order_returns!inner(order_id)')
         .eq('order_returns.order_id', orderId),
     ])
 
     const returnedMap: Record<string, number> = {}
     for (const r of pastReturns ?? []) {
-      returnedMap[r.product_id] = (returnedMap[r.product_id] ?? 0) + Number(r.quantity)
+      const key = `${r.product_id}|${r.unit_name}`
+      returnedMap[key] = (returnedMap[key] ?? 0) + Number(r.quantity)
     }
 
     setOrderItems(
-      (items ?? []).map((it) => ({
-        ...it,
-        quantity: it.quantity - (returnedMap[it.product_id] ?? 0),
-        returnQty: '0',
-      }))
+      remainingByLine(items ?? [], returnedMap).map((it) => ({ ...it, returnQty: '0' }))
     )
   }
 
@@ -147,6 +159,11 @@ export default function Returns() {
       return
     }
 
+    const tooMuch = saleItems.find((it) => Number(it.returnQty) > it.quantity)
+    if (tooMuch) {
+      setError(`كمية مرتجع "${productNames[tooMuch.product_id] ?? ''}" أكبر من المتاح (${tooMuch.quantity})`)
+      return
+    }
 
     setSaving(true)
     const { error } = await supabase.rpc('create_sales_return', {
@@ -158,8 +175,9 @@ export default function Returns() {
     if (error) {
       setError(error.message)
     } else {
-      setSuccess('تم تسجيل المرتجع بنجاح وتحديث المخزون والرصيد')
-      setSaleItems(saleItems.map((it) => ({ ...it, returnQty: '0' })))
+      // نعيد تحميل الكميات المتاحة من القاعدة، عشان الشاشة متفضلش بالأرقام القديمة
+      await loadSaleItems(selectedInvoiceId)
+      setSuccess('تم تسجيل المرتجع بنجاح وتحديث المخزون والرصيد والخزنة')
       setNotes('')
     }
     setSaving(false)
@@ -184,6 +202,12 @@ export default function Returns() {
       return
     }
 
+    const tooMuch = orderItems.find((it) => Number(it.returnQty) > it.quantity)
+    if (tooMuch) {
+      setError(`كمية مرتجع "${productNames[tooMuch.product_id] ?? ''}" أكبر من المتاح (${tooMuch.quantity})`)
+      return
+    }
+
     setSaving(true)
     const { error } = await supabase.rpc('create_order_return', {
       p_order_id: selectedOrderId,
@@ -194,8 +218,8 @@ export default function Returns() {
     if (error) {
       setError(error.message)
     } else {
+      await loadOrderItems(selectedOrderId)
       setSuccess('تم تسجيل مرتجع الطلبية بنجاح وتحديث المخزون')
-      setOrderItems(orderItems.map((it) => ({ ...it, returnQty: '0' })))
       setNotes('')
     }
     setSaving(false)
@@ -236,10 +260,19 @@ export default function Returns() {
       {tab === 'sale' ? (
         <>
           <div className="card p-5 md:p-6 mb-5">
-            <label className="block text-sm text-slate-500 mb-2">اختر الفاتورة</label>
+            <label className="block text-sm text-slate-500 mb-2">اختر الفاتورة (آخر 500 فاتورة، اكتب رقم الفاتورة للبحث)</label>
+            <input
+              type="text"
+              placeholder="بحث برقم الفاتورة..."
+              value={invoiceSearch}
+              onChange={(e) => setInvoiceSearch(e.target.value)}
+              className="w-full border border-border-soft rounded-xl px-3 py-2.5 mb-3 focus:outline-none focus:ring-2 focus:ring-accent"
+            />
             <Select value={selectedInvoiceId} onChange={(e) => loadSaleItems(e.target.value)}>
               <option value="">اختر فاتورة بيع...</option>
-              {invoices.map((inv) => (
+              {invoices
+                .filter((inv) => inv.id === selectedInvoiceId || inv.invoice_number.toLowerCase().includes(invoiceSearch.trim().toLowerCase()))
+                .map((inv) => (
                 <option key={inv.id} value={inv.id}>
                   {inv.invoice_number} — {customerNames[inv.customer_id ?? ''] ?? 'عميل نقدي'}
                 </option>
@@ -249,6 +282,10 @@ export default function Returns() {
 
           {selectedInvoiceId && (
             <>
+              <p className="text-xs text-slate-500 mb-3">
+                المرتجع بيتحسب بسعر الفاتورة الأصلي بعد توزيع الخصم. الجزء المقابل لدين على العميل بينقص من رصيده،
+                والباقي بيتسجّل استرداد نقدي من الخزنة.
+              </p>
               <div className="card overflow-hidden mb-5">
                 <div className="table-scroll">
                   <table className="w-full text-right">
@@ -314,10 +351,19 @@ export default function Returns() {
       ) : (
         <>
           <div className="card p-5 md:p-6 mb-5">
-            <label className="block text-sm text-slate-500 mb-2">اختر الطلبية</label>
+            <label className="block text-sm text-slate-500 mb-2">اختر الطلبية (آخر 500 طلبية، اكتب رقم الطلبية للبحث)</label>
+            <input
+              type="text"
+              placeholder="بحث برقم الطلبية..."
+              value={orderSearch}
+              onChange={(e) => setOrderSearch(e.target.value)}
+              className="w-full border border-border-soft rounded-xl px-3 py-2.5 mb-3 focus:outline-none focus:ring-2 focus:ring-accent"
+            />
             <Select value={selectedOrderId} onChange={(e) => loadOrderItems(e.target.value)}>
               <option value="">اختر طلبية...</option>
-              {orders.map((o) => (
+              {orders
+                .filter((o) => o.id === selectedOrderId || o.order_number.toLowerCase().includes(orderSearch.trim().toLowerCase()))
+                .map((o) => (
                 <option key={o.id} value={o.id}>
                   {o.order_number} — {warehouseNames[o.warehouse_id] ?? '-'}
                 </option>

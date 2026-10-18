@@ -3,6 +3,7 @@ import { Loader2, Trash2, Plus } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { nullableArg } from '../lib/rpcArgs'
 import { fetchAll } from '../lib/fetchAll'
+import { round2, lineTotal } from '../lib/money'
 import { loadDraft, saveDraft, clearDraft } from '../lib/draft'
 import { useAuth } from '../context/useAuth'
 import Select from '../components/Select'
@@ -190,9 +191,10 @@ export default function Sales() {
     setCart(cart.filter((_, i) => i !== index))
   }
 
-  const subtotal = cart.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
-  const discountValue = Number(discount) || 0
-  const total = Math.max(subtotal - discountValue, 0)
+  // كل سطر بيتقرّب لقرشين زي قاعدة البيانات، عشان الإجمالي يطابق ومفيش رفض بسبب كسور عشرية
+  const subtotal = round2(cart.reduce((sum, item) => sum + lineTotal(item.quantity, item.unit_price), 0))
+  const discountValue = round2(Number(discount) || 0)
+  const total = round2(Math.max(subtotal - discountValue, 0))
 
   const resetForm = () => {
     setInvoice(null)
@@ -227,14 +229,15 @@ export default function Sales() {
       setError(`الخصم (${discountValue.toFixed(2)}) أكبر من إجمالي الفاتورة قبل الخصم (${subtotal.toFixed(2)})`)
       return
     }
-    if (Number(paidAmount) > total) {
+    if (customerId && round2(Number(paidAmount)) > total) {
       setError(`المبلغ المدفوع (${Number(paidAmount).toFixed(2)}) أكبر من إجمالي الفاتورة (${total.toFixed(2)})`)
       return
     }
 
     setSaving(true)
 
-    const paid = Number(paidAmount) || 0
+    // العميل النقدي مفيش حساب نسجّل عليه الباقي، فبيتسجّل مدفوع بالكامل دايمًا (والسيرفر بيتأكد برضو)
+    const paid = customerId ? round2(Number(paidAmount) || 0) : total
 
     const { data: invoiceId, error } = await supabase.rpc('create_sale_invoice', {
       p_customer_id: nullableArg(customerId || null),
@@ -450,15 +453,21 @@ export default function Sales() {
           <span className="font-display font-bold text-lg text-navy-900">الإجمالي بعد الخصم</span>
           <span className="font-mono-data font-bold text-lg text-navy-900">{total.toFixed(2)}</span>
         </div>
-        <input
-          type="number"
-          min="0"
-          step="0.01"
-          placeholder="المبلغ المدفوع الآن (اتركه فارغًا لو آجل بالكامل)"
-          value={paidAmount}
-          onChange={(e) => setPaidAmount(e.target.value)}
-          className="w-full border border-border-soft rounded-xl px-3 py-2.5 mb-4 focus:outline-none focus:ring-2 focus:ring-accent"
-        />
+        {customerId ? (
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder="المبلغ المدفوع الآن (اتركه فارغًا لو آجل بالكامل)"
+            value={paidAmount}
+            onChange={(e) => setPaidAmount(e.target.value)}
+            className="w-full border border-border-soft rounded-xl px-3 py-2.5 mb-4 focus:outline-none focus:ring-2 focus:ring-accent"
+          />
+        ) : (
+          <p className="text-sm text-slate-500 bg-surface rounded-xl px-4 py-2.5 mb-4">
+            بيع نقدي (من غير عميل): هيتسجّل مدفوع بالكامل. اختار عميل لو فيه مبلغ آجل.
+          </p>
+        )}
 
         {error && <p className="text-red-600 text-sm mb-3">{error}</p>}
 

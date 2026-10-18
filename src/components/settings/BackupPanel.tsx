@@ -11,6 +11,7 @@ export default function BackupPanel() {
   const [error, setError] = useState('')
   const [backupLog, setBackupLog] = useState<string[]>([])
   const [restoreLog, setRestoreLog] = useState<string[]>([])
+  const [restoreResult, setRestoreResult] = useState<'ok' | 'failed' | null>(null)
 
   const handleBackup = async () => {
     setBusy(true)
@@ -35,6 +36,7 @@ export default function BackupPanel() {
     if (!file) return
     setError('')
     setRestoreLog([])
+    setRestoreResult(null)
 
     try {
       if (file.size > MAX_BACKUP_FILE_BYTES) {
@@ -52,7 +54,8 @@ export default function BackupPanel() {
       const ok = confirm(
         `نسخة بتاريخ ${when}: ${parsed.totalRows} صف في ${tableCount} جدول.\n\n` +
         'الاستعادة بتضيف/تحدّث البيانات فوق الموجود حاليًا ومفيش تراجع بعدها.\n' +
-        'هنزّل الأول نسخة أمان من الوضع الحالي على جهازك.\n\nمتأكد؟'
+        'هنزّل الأول نسخة أمان من الوضع الحالي على جهازك (اتأكد إن المتصفح نزّلها قبل ما تكمّل).\n' +
+        'لو بتستعيد على قاعدة فاضية هتظهر إشعارات كتير في سجل العمليات، وده طبيعي.\n\nمتأكد؟'
       )
       if (!ok) return
 
@@ -66,7 +69,8 @@ export default function BackupPanel() {
         return
       }
 
-      await restoreBackup(parsed.tables, (line) => setRestoreLog((prev) => [...prev, line]))
+      const result = await restoreBackup(parsed.tables, (line) => setRestoreLog((prev) => [...prev, line]))
+      setRestoreResult(result.failed ? 'failed' : 'ok')
     } finally {
       setBusy(false)
       input.value = ''
@@ -108,6 +112,12 @@ export default function BackupPanel() {
           <input type="file" accept="application/json" onChange={handleRestore} disabled={busy} className="hidden" />
         </label>
         {error && <p className="text-red-600 text-sm mt-3">{error}</p>}
+        {restoreResult === 'ok' && (
+          <p className="text-emerald-600 text-sm mt-3">تمت الاستعادة بنجاح. اعمل تحديث للصفحة عشان تشوف البيانات الجديدة.</p>
+        )}
+        {restoreResult === 'failed' && (
+          <p className="text-red-600 text-sm mt-3">الاستعادة فشلت ووقفت في النص. راجع السجل تحت، ونسخة الأمان اللي نزلت قبلها فيها الوضع الأصلي.</p>
+        )}
         {restoreLog.length > 0 && (
           <div className="mt-4 text-xs space-y-1 font-mono-data bg-surface rounded-lg p-3 max-h-60 overflow-y-auto">
             {restoreLog.map((l, i) => <p key={i}>{l}</p>)}

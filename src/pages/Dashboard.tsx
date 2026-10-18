@@ -3,6 +3,7 @@ import { Loader2, Users, Package } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { supabase } from '../lib/supabaseClient'
 import { fetchAll } from '../lib/fetchAll'
+import { round2, netRatio, localDayKey } from '../lib/money'
 import { getPeriodRange, periodLabels, type PeriodType } from '../lib/dateRanges'
 import PeriodSelector from '../components/PeriodSelector'
 
@@ -53,7 +54,7 @@ export default function Dashboard() {
       // النظام من أول يوم، عشان الصفحة تفضل سريعة حتى مع سنين من
       // البيانات المتراكمة
       const [
-        salesRes, ordersRes, saleItemsRes,
+        salesRes, ordersRes, saleItemsRes, returnsRes,
         customersRes, productsRes, warehousesRes,
       ] = await Promise.all([
         fetchAll((from, to) => supabase.from('sales_invoices').select('*')
@@ -62,8 +63,11 @@ export default function Dashboard() {
         fetchAll((from, to) => supabase.from('orders').select('*')
           .gte('created_at', fromIso).lte('created_at', toIso)
           .order('created_at', { ascending: false }).order('id').range(from, to)),
-        fetchAll((from, to) => supabase.from('sales_invoice_items').select('*, sales_invoices!inner(created_at)')
+        fetchAll((from, to) => supabase.from('sales_invoice_items').select('*, sales_invoices!inner(created_at, total_amount, discount_amount)')
           .gte('sales_invoices.created_at', fromIso).lte('sales_invoices.created_at', toIso)
+          .order('id').range(from, to)),
+        fetchAll((from, to) => supabase.from('sales_returns').select('id, total_amount, cost_amount, created_at')
+          .gte('created_at', fromIso).lte('created_at', toIso)
           .order('id').range(from, to)),
         fetchAll((from, to) => supabase.from('customers').select('id, name').order('id').range(from, to)),
         fetchAll((from, to) => supabase.from('products').select('id, name').order('id').range(from, to)),
@@ -75,31 +79,42 @@ export default function Dashboard() {
       const sales = salesRes.data ?? []
       const orders = ordersRes.data ?? []
       const saleItems = saleItemsRes.data ?? []
+      const returns = returnsRes.data ?? []
       const customerMap = Object.fromEntries((customersRes.data ?? []).map((c) => [c.id, c.name]))
       const productMap = Object.fromEntries((productsRes.data ?? []).map((p) => [p.id, p.name]))
       const warehouseMap = Object.fromEntries((warehousesRes.data ?? []).map((w) => [w.id, w.name]))
 
-      setTotalSales(sales.reduce((sum, s) => sum + s.total_amount, 0))
+      // صافي المبيعات = إجمالي الفواتير (بعد الخصم) ناقص المرتجعات اللي اتسجلت في الفترة
+      const returnsTotal = returns.reduce((sum, r) => sum + r.total_amount, 0)
+      setTotalSales(sales.reduce((sum, s) => sum + s.total_amount, 0) - returnsTotal)
       setTotalOrdersCost(orders.reduce((sum, o) => sum + o.total_cost, 0))
       setInvoicesCount(sales.length)
 
-      // الربح الدقيق: الإيراد ناقص التكلفة الفعلية الحقيقية (actual_cost)
-      // المسجّلة وقت البيع من نظام الدفعات (FIFO)، مش تقدير
+      // الربح الدقيق: الإيراد بعد خصم الفاتورة ناقص التكلفة الفعلية الحقيقية (actual_cost)
+      // المسجّلة وقت البيع من نظام الدفعات (FIFO)، وبعدين بنطرح المرتجعات (قيمتها ناقص تكلفتها)
       let profit = 0
       const dailyMap: Record<string, { sales: number; profit: number }> = {}
+      const addToDay = (iso: string, sales: number, profitDelta: number) => {
+        const day = localDayKey(new Date(iso))
+        if (!dailyMap[day]) dailyMap[day] = { sales: 0, profit: 0 }
+        dailyMap[day].sales += sales
+        dailyMap[day].profit += profitDelta
+      }
 
       saleItems.forEach((it) => {
-        const inv = it.sales_invoices as unknown as { created_at: string } | null
-        const itemRevenue = it.quantity * it.unit_price
+        const inv = it.sales_invoices as unknown as
+          { created_at: string; total_amount: number; discount_amount: number } | null
+        const ratio = inv ? netRatio(inv.total_amount, inv.discount_amount) : 1
+        const itemRevenue = it.quantity * it.unit_price * ratio
         const itemProfit = itemRevenue - (it.actual_cost ?? 0)
         profit += itemProfit
+        if (inv) addToDay(inv.created_at, itemRevenue, itemProfit)
+      })
 
-        if (inv) {
-          const day = new Date(inv.created_at).toISOString().slice(0, 10)
-          if (!dailyMap[day]) dailyMap[day] = { sales: 0, profit: 0 }
-          dailyMap[day].sales += itemRevenue
-          dailyMap[day].profit += itemProfit
-        }
+      returns.forEach((r) => {
+        const returnProfit = r.total_amount - r.cost_amount
+        profit -= returnProfit
+        addToDay(r.created_at, -r.total_amount, -returnProfit)
       })
       setTotalProfit(profit)
 
@@ -113,11 +128,11 @@ export default function Dashboard() {
       for (let i = 0; i < dayCount; i++) {
         const d = new Date(range.from)
         d.setDate(d.getDate() + i)
-        const key = d.toISOString().slice(0, 10)
+        const key = localDayKey(d)
         chart.push({
           date: d.toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' }),
-          sales: Math.round((dailyMap[key]?.sales ?? 0) * 100) / 100,
-          profit: Math.round((dailyMap[key]?.profit ?? 0) * 100) / 100,
+          sales: round2(dailyMap[key]?.sales ?? 0),
+          profit: round2(dailyMap[key]?.profit ?? 0),
         })
       }
       setChartData(chart)

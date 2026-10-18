@@ -30,6 +30,8 @@ export default function Stocktake() {
   const [success, setSuccess] = useState('')
   const [notes, setNotes] = useState('')
   const [onlyDifferences, setOnlyDifferences] = useState(false)
+  // بيتزوّد بعد كل جرد ناجح عشان الكميات المسجّلة تتحمّل من القاعدة تاني
+  const [reloadKey, setReloadKey] = useState(0)
 
   const [history, setHistory] = useState<StocktakeRow[]>([])
   const [historyLoading, setHistoryLoading] = useState(true)
@@ -87,7 +89,7 @@ export default function Stocktake() {
     })
 
     return () => { cancelled = true }
-  }, [warehouseId])
+  }, [warehouseId, reloadKey])
 
   const loadHistory = () => {
     setHistoryLoading(true)
@@ -166,6 +168,7 @@ export default function Stocktake() {
     } else {
       setSuccess(`تم تسوية ${changedItems.length} صنف بنجاح، والمخزون بقى مطابق للجرد الفعلي`)
       setNotes('')
+      setReloadKey((k) => k + 1)
     }
     setSaving(false)
   }

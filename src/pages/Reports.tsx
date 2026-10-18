@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Loader2, FileSpreadsheet, BarChart3, Lightbulb } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { fetchAll } from '../lib/fetchAll'
+import { netRatio } from '../lib/money'
 import { exportMultiSheetExcel } from '../lib/exportExcel'
 import { exportWarehouseInventory } from '../lib/exportInventory'
 import { getPeriodRange, type PeriodType } from '../lib/dateRanges'
@@ -71,7 +72,7 @@ export default function Reports() {
       if (tab === 'profit') {
         const { data: items } = await fetchAll((from, to) => supabase
           .from('sales_invoice_items')
-          .select('*, sales_invoices!inner(id, created_at, invoice_number)')
+          .select('*, sales_invoices!inner(id, created_at, invoice_number, total_amount, discount_amount)')
           .gte('sales_invoices.created_at', fromIso).lte('sales_invoices.created_at', toIso)
           .order('id')
           .range(from, to))
@@ -82,8 +83,10 @@ export default function Reports() {
         const byInvoice: Record<string, { id: string; revenue: number; profit: number }> = {}
 
         list.forEach((it) => {
-          const inv = it.sales_invoices as unknown as { id: string; invoice_number: string }
-          const revenue = it.quantity * it.unit_price
+          const inv = it.sales_invoices as unknown as
+            { id: string; invoice_number: string; total_amount: number; discount_amount: number }
+          // الإيراد بعد توزيع خصم الفاتورة على أسطرها
+          const revenue = it.quantity * it.unit_price * netRatio(inv.total_amount, inv.discount_amount)
           const profit = revenue - (it.actual_cost ?? 0)
           totalRevenue += revenue
           totalProfit += profit
@@ -92,10 +95,23 @@ export default function Reports() {
           byInvoice[inv.invoice_number].profit += profit
         })
 
+        // المرتجعات اللي اتسجلت في الفترة بتتخصم من الإيراد والربح (قيمتها ناقص تكلفتها)
+        const { data: retData } = await fetchAll((from, to) => supabase
+          .from('sales_returns')
+          .select('total_amount, cost_amount')
+          .gte('created_at', fromIso).lte('created_at', toIso)
+          .order('id')
+          .range(from, to))
+        const retTotal = (retData ?? []).reduce((s, r) => s + r.total_amount, 0)
+        const retCost = (retData ?? []).reduce((s, r) => s + r.cost_amount, 0)
+        totalRevenue -= retTotal
+        totalProfit -= retTotal - retCost
+
         const margin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0
 
         setSummary([
-          { label: 'إجمالي الإيراد', value: totalRevenue.toFixed(2) },
+          { label: 'إجمالي الإيراد (بعد الخصم والمرتجعات)', value: totalRevenue.toFixed(2) },
+          { label: 'مرتجعات الفترة', value: retTotal.toFixed(2) },
           { label: 'إجمالي الربح الدقيق', value: totalProfit.toFixed(2) },
           { label: 'هامش الربح', value: `${margin.toFixed(1)}%` },
         ])

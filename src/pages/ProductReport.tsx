@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Loader2, ArrowRight } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { fetchAll } from '../lib/fetchAll'
+import { netRatio } from '../lib/money'
 import type { Database } from '../lib/database.types'
 
 type Product = Database['public']['Tables']['products']['Row']
@@ -25,8 +26,9 @@ export default function ProductReport() {
     Promise.all([
       supabase.from('products').select('*').eq('id', id).single(),
       supabase.from('inventory').select('quantity, warehouses(name)').eq('product_id', id),
-      fetchAll((from, to) => supabase.from('sales_invoice_items').select('*, sales_invoices(invoice_number, created_at)').eq('product_id', id).order('id').range(from, to)),
-    ]).then(([p, inv, items]) => {
+      fetchAll((from, to) => supabase.from('sales_invoice_items').select('*, sales_invoices(invoice_number, created_at, total_amount, discount_amount)').eq('product_id', id).order('id').range(from, to)),
+      fetchAll((from, to) => supabase.from('sales_return_items').select('quantity, line_total, cost_amount').eq('product_id', id).order('id').range(from, to)),
+    ]).then(([p, inv, items, returned]) => {
       if (cancelled) return
       if (p.data) setProduct(p.data)
 
@@ -38,9 +40,24 @@ export default function ProductReport() {
       )
 
       const list = items.data ?? []
-      setTotalSoldQty(list.reduce((s, i) => s + Number(i.quantity), 0))
-      setTotalRevenue(list.reduce((s, i) => s + i.quantity * i.unit_price, 0))
-      setTotalProfit(list.reduce((s, i) => s + (i.quantity * i.unit_price - (i.actual_cost ?? 0)), 0))
+      const returnedList = returned.data ?? []
+      const ratioOf = (i: (typeof list)[number]) => {
+        const inv = i.sales_invoices as unknown as { total_amount: number; discount_amount: number } | null
+        return inv ? netRatio(inv.total_amount, inv.discount_amount) : 1
+      }
+      // الكمية والإيراد والربح صافيين: بعد خصم الفاتورة وبعد المرتجعات
+      setTotalSoldQty(
+        list.reduce((s, i) => s + Number(i.quantity), 0) -
+        returnedList.reduce((s, r) => s + Number(r.quantity), 0)
+      )
+      setTotalRevenue(
+        list.reduce((s, i) => s + i.quantity * i.unit_price * ratioOf(i), 0) -
+        returnedList.reduce((s, r) => s + r.line_total, 0)
+      )
+      setTotalProfit(
+        list.reduce((s, i) => s + (i.quantity * i.unit_price * ratioOf(i) - (i.actual_cost ?? 0)), 0) -
+        returnedList.reduce((s, r) => s + (r.line_total - r.cost_amount), 0)
+      )
       setSalesHistory(
         list
           .map((i) => {

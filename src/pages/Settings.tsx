@@ -4,7 +4,6 @@ import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../context/useAuth'
 import BackupPanel from '../components/settings/BackupPanel'
 import { MIN_PASSWORD_LENGTH, normalizeUsername } from '../lib/authRules'
-import { nullableArg } from '../lib/rpcArgs'
 import type { Database as DB } from '../lib/database.types'
 
 type UserRow = DB['public']['Tables']['users']['Row']
@@ -330,10 +329,18 @@ export default function Settings() {
   }
 
   const handleNumberingSave = async () => {
-    setError(''); setSuccess(''); setSaving(true)
+    setError(''); setSuccess('')
+    const sales = Number(nextSalesNumber)
+    const orders = Number(nextOrderNumber)
+    // أرقام صحيحة موجبة بس. السيرفر كمان بيرفض أي رقم أقل من آخر فاتورة موجودة
+    if (!Number.isInteger(sales) || sales < 1 || !Number.isInteger(orders) || orders < 1) {
+      setError('رقم الفاتورة والطلبية لازم يكونوا أرقام صحيحة من 1 فأكتر')
+      return
+    }
+    setSaving(true)
     const { error } = await supabase.rpc('set_invoice_numbering', {
-      p_next_sales_number: nullableArg(Number(nextSalesNumber) || null),
-      p_next_order_number: nullableArg(Number(nextOrderNumber) || null),
+      p_next_sales_number: sales,
+      p_next_order_number: orders,
     })
     if (error) setError(error.message)
     else setSuccess('تم تحديث ترقيم الفواتير')

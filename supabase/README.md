@@ -21,6 +21,8 @@ supabase/
 | `20261012000002_add_missing_indexes.sql` | فهارس ناقصة (تواريخ وأعمدة الربط) | نعم |
 | `20261012000003_add_non_negative_checks.sql` | قيود "مفيش أرقام سالبة" (NOT VALID) | نعم، **بعد** فحص الصفوف القديمة (الاستعلامات جواه) |
 | `20261012000004_validate_rpc_inputs.sql` | تحقق من المدخلات داخل `create_sale_invoice` و`create_order` و`apply_stocktake` + قيد على معامل التحويل | نعم |
+| `20261016000001_balance_rules_and_exact_costs.sql` | **رصيد العميل ≥ 0 دايمًا** (تحصيل لحد الدين فقط، إلغاء الفاتورة يرد المدفوع، قيد CHECK)، معامل التحويل من السيرفر، استرداد مرتجع الطلبية بتكلفة الدفعات الفعلية، زيادة الجرد بمتوسط التكلفة | نعم، بعد `20261015000001`. اقرأ التنبيهات اللي في أول الملف |
+| `20261015000001_fix_financial_logic.sql` | إصلاح المرتجعات والخصم والبيع النقدي والترقيم والإلغاء والدفعات + أعمدة `cash_refund` و`cost_amount` وجدول `cancelled_documents` | نعم، على مشروع تجريبي الأول |
 
 ### إزاي تطبّقها على القاعدة الشغّالة
 1. اعمل **نسخة احتياطية** الأول (من الإعدادات في الموقع، وتأكد من أرقام الصفوف).
@@ -34,7 +36,9 @@ supabase/
 ## الاختبارات
 ```bash
 python -m pip install pgserver
-python supabase/tests/db_scenarios.py     # أو: npm run test:db
+python supabase/tests/db_scenarios.py     # أو: npm run test:db       (الأمان + سيناريوهات أساسية)
+python supabase/tests/db_full_flows.py    # أو: npm run test:flows    (كل عملية بكل توابعها + اختبار عشوائي + معادلة محاسبية)
+python supabase/tests/db_full_flows.py --fuzz 400 --seed 7   # عشوائي أطول وببذرة مختلفة
 ```
 بتبني قاعدة Postgres مؤقتة على جهازك، وتطبّق كل الـ migrations، وتجرّب: ثغرة anon، منطق FIFO والأرصدة والإلغاء، المرتجعات والدفعات، وكل المدخلات الغلط. لازم تطلع `كل الاختبارات نجحت`. شغّلها بعد أي migration جديد.
 حدودها: الأدوار (anon/authenticated) و`auth.uid()` متقلَّدين بشكل مبسّط، فهي مش بديل لتجربة على مشروع Supabase تجريبي.

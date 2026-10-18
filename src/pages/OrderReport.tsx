@@ -4,6 +4,7 @@ import { Loader2, ArrowRight, FileSpreadsheet } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { fetchAll } from '../lib/fetchAll'
 import { exportMultiSheetExcel } from '../lib/exportExcel'
+import { netRatio } from '../lib/money'
 import type { Database } from '../lib/database.types'
 
 type Order = Database['public']['Tables']['orders']['Row']
@@ -44,6 +45,9 @@ export default function OrderReport() {
       const { data: orderItems } = await supabase.from('order_items').select('*').eq('order_id', orderId)
       const { data: products } = await fetchAll((from, to) => supabase.from('products').select('id, name').order('id').range(from, to))
       const productMap = Object.fromEntries((products ?? []).map((p) => [p.id, p.name]))
+      // معامل تحويل الوحدات: سعر البيع بيكون للوحدة اللي اتباعت بيها (قطعة/كرتونة)، والدفعات بالقطعة
+      const { data: units } = await fetchAll((from, to) => supabase.from('product_units').select('product_id, unit_name, conversion_factor').order('id').range(from, to))
+      const unitFactor = new Map((units ?? []).map((u) => [`${u.product_id}|${u.unit_name}`, Number(u.conversion_factor)]))
 
       // كل صنف في الطلبية له دفعة (Lot) واحدة بالظبط مربوطة بيها — ده
       // اللي بيدي دقة كاملة: نعرف بالظبط كام قطعة اتباعت من الطلبية دي
@@ -65,16 +69,22 @@ export default function OrderReport() {
         if (lot) {
           const { data: usage } = await supabase
             .from('sale_item_lot_usage')
-            .select('quantity, sales_invoice_items(unit_price, sales_invoices(created_at))')
+            .select('quantity, sales_invoice_items(product_id, unit_name, unit_price, sales_invoices(created_at, total_amount, discount_amount))')
             .eq('lot_id', lot.id)
 
           for (const u of usage ?? []) {
             const saleItem = u.sales_invoice_items as unknown as {
+              product_id: string
+              unit_name: string
               unit_price: number
-              sales_invoices: { created_at: string } | null
+              sales_invoices: { created_at: string; total_amount: number; discount_amount: number } | null
             } | null
             soldQty += Number(u.quantity)
-            soldRevenue += Number(u.quantity) * (saleItem?.unit_price ?? 0)
+            // سعر القطعة = سعر الوحدة ÷ معامل تحويلها (كرتونة = 6 قطع)، وبعد خصم الفاتورة
+            const factor = saleItem ? unitFactor.get(`${saleItem.product_id}|${saleItem.unit_name}`) ?? 1 : 1
+            const inv = saleItem?.sales_invoices
+            const ratio = inv ? netRatio(inv.total_amount, inv.discount_amount) : 1
+            soldRevenue += Number(u.quantity) * ((saleItem?.unit_price ?? 0) / factor) * ratio
             const date = saleItem?.sales_invoices?.created_at
             if (date && (!lastSaleDate || date > lastSaleDate)) lastSaleDate = date
           }

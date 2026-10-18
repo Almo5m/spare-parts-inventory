@@ -23,7 +23,8 @@ const RESTORE_CHUNK_SIZE = 500
 // الترتيب مهم: الجدول الأب قبل الابن عشان الـ foreign keys تفضل سليمة وقت الاستعادة
 export const BACKUP_TABLES = [
   'company_settings', 'warehouses', 'categories', 'products', 'product_units',
-  'customers', 'inventory', 'orders', 'order_items', 'inventory_lots',
+  'customers', 'inventory', 'inventory_movements', 'warehouse_transfers', 'warehouse_transfer_items',
+  'orders', 'order_items', 'inventory_lots',
   'sales_invoices', 'sales_invoice_items', 'sale_item_lot_usage',
   'sales_returns', 'sales_return_items',
   'order_returns', 'order_return_items', 'stocktakes', 'stocktake_items',
@@ -73,6 +74,13 @@ export async function buildBackup(): Promise<BuiltBackup> {
   if (users.error) throw new Error(`فشل جلب جدول users: ${users.error}`)
   file['users_reference'] = users.data
 
+  // لقطات الفواتير والطلبيات الملغية: للمرجعية بس ومش بتتستعاد (جدولها بيتكتب من دوال الإلغاء بس)
+  const cancelled = await fetchAll<Row>((from, to) =>
+    db.from('cancelled_documents').select('*').order('id').range(from, to)
+  )
+  if (cancelled.error) throw new Error(`فشل جلب جدول cancelled_documents: ${cancelled.error}`)
+  file['cancelled_documents_reference'] = cancelled.data
+
   const meta = { created_at: new Date().toISOString(), version: BACKUP_VERSION, counts }
   return { file: { meta, ...file }, counts, totalRows }
 }
@@ -85,7 +93,8 @@ export function downloadJson(filenamePrefix: string, data: unknown): void {
   a.href = url
   a.download = `${filenamePrefix}-${stamp}.json`
   a.click()
-  URL.revokeObjectURL(url)
+  // لو اتلغى الرابط فورًا بعض المتصفحات بتلغي التنزيل نفسه، فبنأخّره شوية
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
 }
 
 export type ParsedBackup =

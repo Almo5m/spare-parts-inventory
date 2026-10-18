@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test:db": "python supabase/tests/db_scenarios.py"
+    "test:db": "python supabase/tests/db_scenarios.py",
+    "test:flows": "python supabase/tests/db_full_flows.py"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",

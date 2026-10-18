@@ -208,11 +208,11 @@ def order_items(qty, cost, cf=1):
     )
 
 
-def sale_items(qty, price, cf=1):
+def sale_items(qty, price, cf=1, unit="قطعة"):
     return (
         f"jsonb_build_array(jsonb_build_object("
         f"'product_id','{PRODUCT}',"
-        f"'unit_name','قطعة',"
+        f"'unit_name','{unit}',"
         f"'conversion_factor',{cf},"
         f"'quantity',{qty},"
         f"'unit_price',{price}))"
@@ -458,7 +458,7 @@ db.run(
 
 ok, _ = db.as_user(
     f"select public.create_sale_invoice('{CUSTOMER}','{WH}',"
-    f"{sale_items(1, 500, 6)},500,0);"
+    f"{sale_items(1, 500, 6, 'كرتونة')},500,0);"
 )
 
 check(
@@ -580,6 +580,198 @@ ok, _ = db2.as_user(
 )
 
 check("مرتجع بيع أكبر من المباع مرفوض", not ok)
+
+
+# ---------------------------------------------------------------
+# إصلاحات فحص 2026-10-15: الخصم، النقدي، المرتجعات، الترقيم، الدفعات
+print("== إصلاحات منطق الحسابات (migration 20261015000001) ==")
+
+
+def ret_item(qty, unit="قطعة"):
+    return (
+        f"jsonb_build_array(jsonb_build_object("
+        f"'product_id','{PRODUCT}','unit_name','{unit}',"
+        f"'quantity',{qty}))"
+    )
+
+
+db3 = Db(ALL)
+db3.run(SEED, strict=True)
+
+db3.as_user(
+    f"select public.create_order('{WH}','o',{order_items(30, 100)},0);"
+)
+
+# 1) عميل نقدي
+ok, _ = db3.as_user(
+    f"select public.create_sale_invoice(null,'{WH}',"
+    f"{sale_items(1, 100)},50,0);"
+)
+check("بيع نقدي بدفع جزئي مرفوض (الدين كان بيضيع)", not ok)
+
+ok, _ = db3.as_user(
+    f"select public.create_sale_invoice(null,'{WH}',"
+    f"{sale_items(2, 200)},400,0);"
+)
+check("بيع نقدي مدفوع بالكامل مقبول", ok)
+
+# 2) مرتجع فاتورة عليها خصم ومفيهاش دفع: العميل يتخصم له الصافي بعد الخصم بس
+db3.as_user(
+    f"select public.create_sale_invoice('{CUSTOMER}','{WH}',"
+    f"{sale_items(4, 250)},0,100);"
+)
+check(
+    "فاتورة 1000 بخصم 100: رصيد العميل 900",
+    db3.value("select balance from public.customers") == "900.00",
+)
+
+ok, msg = db3.as_user(
+    f"select public.create_sales_return("
+    f"(select id from public.sales_invoices where customer_id is not null),"
+    f"{ret_item(4)},'x');"
+)
+check("مرتجع الفاتورة كلها مقبول", ok, msg[-200:])
+check(
+    "المرتجع بالصافي بعد الخصم (900 مش 1000) والرصيد يرجع صفر",
+    db3.value("select total_amount from public.sales_returns") == "900.00"
+    and db3.value("select balance from public.customers") == "0.00"
+    and db3.value("select cash_refund from public.sales_returns") == "0.00",
+)
+
+# 3) مرتجع فاتورة مدفوعة بالكامل: استرداد نقدي من الخزنة بدل رصيد دائن
+db3.as_user(
+    f"select public.create_sale_invoice('{CUSTOMER}','{WH}',"
+    f"{sale_items(1, 200)},200,0);"
+)
+db3.as_user(
+    f"select public.create_sales_return("
+    f"(select id from public.sales_invoices "
+    f"where total_amount = 200 and customer_id is not null),"
+    f"{ret_item(1)},'x');"
+)
+check(
+    "مرتجع فاتورة مدفوعة: استرداد نقدي 200 والرصيد يفضل صفر",
+    db3.value(
+        "select cash_refund from public.sales_returns "
+        "where total_amount = 200"
+    ) == "200.00"
+    and db3.value("select balance from public.customers") == "0.00"
+    and db3.value(
+        "select count(*) from public.treasury_transactions "
+        "where type = 'sale_in' and amount = -200"
+    ) == "1",
+)
+
+# 4) مدخلات غلط في المرتجع
+inv_id = "(select id from public.sales_invoices where total_amount = 200 and customer_id is not null)"
+for label, sql in {
+    "كمية سالبة في مرتجع بيع": (
+        f"select public.create_sales_return({inv_id},{ret_item(-1)},'x');"
+    ),
+    "وحدة مش موجودة في الفاتورة": (
+        f"select public.create_sales_return({inv_id},{ret_item(1, 'كرتونة')},'x');"
+    ),
+    "كمية سالبة في مرتجع طلبية": (
+        f"select public.create_order_return("
+        f"(select id from public.orders),{ret_item(-1)},'x');"
+    ),
+}.items():
+    ok, _ = db3.as_user(sql)
+    check(f"مرفوض: {label}", not ok)
+
+# 5) إلغاء فاتورة عليها مرتجع مرفوض برسالة واضحة، وإلغاء سليم بيسجّل لقطة
+ok, msg = db3.as_user(f"select public.void_sale_invoice({inv_id});")
+check("إلغاء فاتورة عليها مرتجع مرفوض", not ok and "مرتجعات" in msg, msg[-200:])
+
+db3.as_user(
+    "select public.void_sale_invoice(id) from public.sales_invoices "
+    "where customer_id is null;"
+)
+check(
+    "الإلغاء بيسجّل لقطة في cancelled_documents",
+    db3.value("select count(*) from public.cancelled_documents") == "1",
+)
+
+# 6) ترقيم الفواتير
+ok, _ = db3.as_user("select public.set_invoice_numbering(1, null);")
+check("ترقيم أقل من آخر فاتورة موجودة مرفوض", not ok)
+
+ok, _ = db3.as_user("select public.set_invoice_numbering(0, null);")
+check("ترقيم صفر مرفوض", not ok)
+
+db3.run("update public.company_settings set next_sales_invoice_number = 1;")
+ok, msg = db3.as_user(
+    f"select public.create_sale_invoice(null,'{WH}',"
+    f"{sale_items(1, 100)},100,0);"
+)
+check(
+    "لو العداد اتلخبط البيع بيتخطى الأرقام المستخدمة بدل ما يقف",
+    ok and db3.value(
+        "select count(*) = count(distinct invoice_number) "
+        "from public.sales_invoices"
+    ) == "t",
+    msg[-200:],
+)
+
+# 7) الدفعات
+ok, _ = db3.as_user(
+    "select public.record_payment('customer',"
+    "'99999999-9999-9999-9999-999999999999','in',10,'x');"
+)
+check("دفعة لعميل مش موجود مرفوضة", not ok)
+
+ok, _ = db3.as_user(
+    "select public.record_payment('supplier',"
+    "(select id from public.customers),'in',10,'x');"
+)
+check("دفعة لمورد مرفوضة (الموردين اتشالوا)", not ok)
+
+ok, _ = db3.as_user(
+    "select public.record_payment('customer',"
+    "(select id from public.customers),'out',50,'استرداد');"
+)
+check(
+    "صرف لعميل مرفوض (مفيش أرصدة دائنة للعملاء)",
+    not ok and db3.value("select balance from public.customers") == "0.00",
+)
+
+# 8) جرد
+ok, _ = db3.as_user(
+    f"select public.apply_stocktake('{WH}','t','[]'::jsonb);"
+)
+check("جرد بقائمة فاضية مرفوض", not ok)
+
+# 9) متوسط التكلفة المرجّح في المرتجع
+db4 = Db(ALL)
+db4.run(SEED, strict=True)
+db4.as_user(f"select public.create_order('{WH}','a',{order_items(10, 100)},0);")
+db4.as_user(f"select public.create_order('{WH}','b',{order_items(2, 400)},0);")
+db4.as_user(
+    f"select public.create_sale_invoice('{CUSTOMER}','{WH}',"
+    f"{sale_items(11, 200)},2200,0);"
+)
+db4.as_user(
+    f"select public.create_sales_return((select id from public.sales_invoices),"
+    f"{ret_item(1)},'x');"
+)
+check(
+    "تكلفة الدفعة المرتجعة مرجّحة: 1400÷11 = 127.2727 (مش المتوسط البسيط 250)",
+    db4.value(
+        "select unit_cost from public.inventory_lots "
+        "where source_type = 'return'"
+    ) == "127.2727",
+)
+
+# 10) خصم الطلبية داخل تكلفة الدفعة
+db4.as_user(f"select public.create_order('{WH}','c',{order_items(10, 100)},100);")
+check(
+    "خصم الطلبية موزّع على تكلفة الدفعة (900÷10 = 90)",
+    db4.value(
+        "select unit_cost from public.inventory_lots l "
+        "join public.orders o on o.id = l.source_id "
+        "where o.notes = 'c'"
+    ) == "90.0000",
+)
 
 
 # ---------------------------------------------------------------

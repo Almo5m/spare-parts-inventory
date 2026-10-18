@@ -50,29 +50,59 @@ export default function Statement() {
 
     const paymentRows: LedgerRow[] = (paymentsRes.data ?? []).map((p) => ({
       date: p.created_at,
-      label: p.notes || 'دفعة محصّلة',
-      debit: 0,
-      credit: p.amount,
+      label: p.notes || (p.direction === 'out' ? 'مبلغ مصروف للعميل' : 'دفعة محصّلة'),
+      // التحصيل بينقص مديونية العميل (دائن)، والصرف للعميل بيزوّدها (مدين)
+      debit: p.direction === 'out' ? p.amount : 0,
+      credit: p.direction === 'out' ? 0 : p.amount,
     }))
 
-    // مرتجع البيع بينقص من مديونية العميل، فبيظهر كحركة "دائن" لوحدها
-    // في الكشف — عشان الرصيد المتراكم في الجدول يطابق رصيد العميل
-    // الفعلي المعروض فوق
-    const returnRows: LedgerRow[] = (returnsRes.data ?? []).map((r) => {
+    // مرتجع البيع حركة "دائن" لوحدها في الكشف، عشان الرصيد المتراكم في الجدول
+    // يطابق رصيد العميل الفعلي المعروض فوق. المرتجع بيظهر دائن بقيمته كاملة، ولو جزء منه اتردّ نقدًا بيظهر صف مدين بالمبلغ ده،
+    // عشان صافي أثر المرتجع في الكشف يطابق اللي اتخصم فعلًا من رصيد العميل
+    const returnRows: LedgerRow[] = (returnsRes.data ?? []).flatMap((r) => {
       const inv = r.sales_invoices as unknown as { invoice_number: string } | null
-      return {
+      const what = inv ? `فاتورة ${inv.invoice_number}` : 'بيع'
+      const rows: LedgerRow[] = [{
         date: r.created_at,
-        label: `مرتجع ${inv ? `فاتورة ${inv.invoice_number}` : 'بيع'}${r.notes ? ` — ${r.notes}` : ''}`,
+        label: `مرتجع ${what}${r.notes ? ` — ${r.notes}` : ''}`,
         debit: 0,
         credit: r.total_amount,
+      }]
+      if (r.cash_refund > 0) {
+        rows.push({
+          date: r.created_at,
+          label: `استرداد نقدي لمرتجع ${what}`,
+          debit: r.cash_refund,
+          credit: 0,
+        })
       }
+      return rows
     })
 
     const combined = [...invoiceRows, ...paymentRows, ...returnRows].sort(
       (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
     )
 
-    setRows(combined)
+    // لو فاتورة اتلغت بعد ما العميل سدّد جزء منها، حركة السداد بتفضل في الكشف والفاتورة بتختفي (والفلوس بتترد له)،
+    // فبنضيف صف تسوية عشان آخر رصيد في الجدول يطابق رصيد العميل الفعلي
+    let finalRows = combined
+    if (partyRes.data) {
+      const ledgerBalance = combined.reduce((s, r) => s + r.debit - r.credit, 0)
+      const diff = Math.round((partyRes.data.balance - ledgerBalance) * 100) / 100
+      if (Math.abs(diff) >= 0.01) {
+        finalRows = [
+          {
+            date: combined[0]?.date ?? new Date().toISOString(),
+            label: 'تسوية (فواتير ملغاة بعد سداد جزء منها)',
+            debit: diff > 0 ? diff : 0,
+            credit: diff < 0 ? -diff : 0,
+          },
+          ...combined,
+        ]
+      }
+    }
+
+    setRows(finalRows)
     setLoading(false)
   }
 
@@ -95,6 +125,15 @@ export default function Statement() {
     const value = Number(amount)
     if (!value || value <= 0) {
       setError('اكتب مبلغ صحيح أكبر من صفر')
+      return
+    }
+    // التحصيل لحد قيمة الدين بس (مفيش عميل رصيده بالسالب). السيرفر بيتأكد برضو.
+    if (!party || party.balance <= 0) {
+      setError('العميل ده مفيهوش مديونية')
+      return
+    }
+    if (value > party.balance) {
+      setError(`المبلغ أكبر من مديونية العميل (${party.balance.toFixed(2)})`)
       return
     }
 
@@ -186,15 +225,32 @@ export default function Statement() {
           <Wallet size={16} className="text-accent-dark" />
           <p className="font-display font-bold text-navy-900">تسجيل تحصيل من العميل</p>
         </div>
+        {party.balance <= 0 && (
+          <p className="text-sm text-slate-500 mb-3">العميل ده مفيهوش مديونية حاليًا، فمفيش حاجة تتحصّل.</p>
+        )}
         <form onSubmit={handleRecordPayment} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <input
-            type="number"
-            step="0.01"
-            placeholder="المبلغ"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            className="border border-border-soft rounded-xl px-3 py-2.5 font-mono-data focus:outline-none focus:ring-2 focus:ring-accent"
-          />
+          <div className="relative">
+            <input
+              type="number"
+              step="0.01"
+              min="0.01"
+              max={party.balance > 0 ? party.balance : undefined}
+              placeholder={party.balance > 0 ? `المبلغ (حتى ${party.balance.toFixed(2)})` : 'المبلغ'}
+              value={amount}
+              disabled={party.balance <= 0}
+              onChange={(e) => setAmount(e.target.value)}
+              className="w-full border border-border-soft rounded-xl px-3 py-2.5 font-mono-data focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+            />
+            {party.balance > 0 && (
+              <button
+                type="button"
+                onClick={() => setAmount(party.balance.toFixed(2))}
+                className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-accent-dark hover:underline"
+              >
+                سداد كامل
+              </button>
+            )}
+          </div>
           <input
             type="text"
             placeholder="ملاحظة (اختياري)"
@@ -204,7 +260,7 @@ export default function Statement() {
           />
           <button
             type="submit"
-            disabled={saving}
+            disabled={saving || party.balance <= 0}
             className="btn-primary flex items-center justify-center gap-2 text-white rounded-xl py-2.5 font-medium transition-all disabled:opacity-70"
           >
             {saving && <Loader2 size={16} className="animate-spin" />}

@@ -37,12 +37,30 @@
 - `supabase/tests/db_scenarios.py`: 36 حالة اختبار على Postgres مؤقت.
 - `npm run test:db` سكريبت جديد.
 
+## المرحلة 5 — 15 أكتوبر 2026 (فحص شامل للمنطق المحاسبي)
+فحص يدوي لكل الدوال والصفحات، طلع مشاكل في الحسابات (التفاصيل في `PROBLEMS_LOG.md` بند 11).
+- migration جديدة: `20261015000001_fix_financial_logic.sql` (مرتجعات صحيحة، رفض الآجل للعميل النقدي، ترقيم آمن، إلغاء بلقطة، دقة تكلفة الوحدة).
+- أعمدة جديدة: `sales_returns.cash_refund` و`cost_amount`، `sales_return_items.cost_amount`، وجدول `cancelled_documents`.
+- الواجهة: `src/lib/money.ts` (تقريب وتاريخ محلي ونسبة الخصم)، تصحيح الربح في 4 صفحات، صفحة المرتجعات، كشف الحساب، الجرد، النسخ الاحتياطي، `vercel.json`.
+- Edge Function `manage-users` اتعدّلت (لازم إعادة نشرها).
+- اتشالوا `Inventory.tsx` و`ComingSoon.tsx`، واتغيّر اسم `FULL_DOCUMENTATION.md`.
+- **اللي ما اتجرّبش:** SQL الجديد واختباراته (+20 حالة تقريبًا) وبناء الواجهة، لأن البيئة وقتها من غير Postgres وحزم npm.
+
 ## المطلوب لسه
 - [x] سحب الـ migrations الحقيقية من Supabase (اتعمل، الـ baseline جاهز).
-- [ ] تطبيق migrations التحصين على Supabase الحقيقي بالترتيب (`supabase/README.md`).
+- [x] تشغيل `npm run test:db` و`npm run test:flows` و`lint` و`build` (اتشغّلوا في المرحلة 6 وعدّوا).
+- [ ] تطبيق migrations التحصين و`20261015000001` و`20261016000001` على Supabase الحقيقي بالترتيب (`supabase/README.md`)، **قبل** نشر الواجهة الجديدة.
 - [ ] تشغيل استعلامي 7 و8 في `checks/01-security-audit.sql` (حسابات يتيمة).
 - [ ] تشغيل `supabase/checks/01-security-audit.sql` وإيقاف التسجيل العام في Auth.
 - [ ] إعادة نشر Edge Function `manage-users` بعد التعديل (كلمة المرور 10 + تنظيف username).
 - [ ] تجربة النسخة الاحتياطية والاستعادة على مشروع تجريبي.
 - [ ] مراقبة الـ console لأخطاء CSP، وبعدها تحويل `Content-Security-Policy-Report-Only` إلى `Content-Security-Policy`.
 - [ ] استيراد المخزون الحالي من شيت Excel (مرة واحدة، عبر سكريبت SQL).
+
+## المرحلة 6 — دمج النسختين وتشغيل كل حاجة فعليًا
+- اتقارنت نسخة GitHub (اللي فيها شغل المرحلة 5) بنسخة تانية اشتغلت على نفس المشاكل. الاتنين لقيوا نفس الأخطاء تقريبًا بتصميمين مختلفين.
+- اتشغّل لأول مرة: `db_scenarios.py` على migrations المرحلة 5 (57/57 عدّى)، وبعدين اختبار شامل جديد لقط فروق حقيقية (رصيد سالب، معامل تحويل من الواجهة، استرداد مرتجع الطلبية، تكلفة الجرد).
+- migration جديدة `20261016000001_balance_rules_and_exact_costs.sql` فوق `20261015000001`. تفاصيلها في `PROBLEMS_LOG.md` بند 12.
+- `supabase/tests/db_full_flows.py` + `helpers.py` + سكريبت `npm run test:flows`.
+- الواجهة: تقرير الطلبية (كراتين + خصم)، كشف الحساب (حد التحصيل وصف التسوية)، البيع النقدي بيتدفع كامل تلقائيًا.
+- **الحصيلة:** tsc strict و lint و build نضاف. 57 + 259 اختبار + عشوائي عدّوا.

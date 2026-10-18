@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Loader2, ArrowRight, FileSpreadsheet } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { fetchAll } from '../lib/fetchAll'
+import { netRatio } from '../lib/money'
 import { exportMultiSheetExcel } from '../lib/exportExcel'
 import type { Database } from '../lib/database.types'
 
@@ -25,6 +26,8 @@ export default function SaleReport() {
   const [customerName, setCustomerName] = useState('عميل نقدي')
   const [warehouseName, setWarehouseName] = useState('')
   const [items, setItems] = useState<ItemReport[]>([])
+  const [returnsTotal, setReturnsTotal] = useState(0)
+  const [returnsCost, setReturnsCost] = useState(0)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -54,6 +57,17 @@ export default function SaleReport() {
 
       const productMap = Object.fromEntries((productsRes.data ?? []).map((p) => [p.id, p.name]))
 
+      const { data: returnRows } = await supabase
+        .from('sales_returns')
+        .select('total_amount, cost_amount')
+        .eq('sales_invoice_id', invoiceId)
+      if (cancelled) return
+      setReturnsTotal((returnRows ?? []).reduce((s, r) => s + r.total_amount, 0))
+      setReturnsCost((returnRows ?? []).reduce((s, r) => s + r.cost_amount, 0))
+
+      // الربح بعد توزيع خصم الفاتورة على أسطرها
+      const ratio = netRatio(invoiceData.total_amount, invoiceData.discount_amount)
+
       const reports: ItemReport[] = (itemsRes.data ?? []).map((it) => ({
         name: productMap[it.product_id] ?? it.product_id,
         unitName: it.unit_name,
@@ -61,7 +75,7 @@ export default function SaleReport() {
         unitPrice: it.unit_price,
         lineTotal: it.line_total,
         actualCost: it.actual_cost ?? 0,
-        profit: it.line_total - (it.actual_cost ?? 0),
+        profit: it.line_total * ratio - (it.actual_cost ?? 0),
       }))
 
       setItems(reports)
@@ -82,9 +96,11 @@ export default function SaleReport() {
   }
 
   const totalCost = items.reduce((s, i) => s + i.actualCost, 0)
-  const totalProfit = items.reduce((s, i) => s + i.profit, 0)
-  const margin = invoice.total_amount > 0 ? (totalProfit / invoice.total_amount) * 100 : 0
-  const remaining = invoice.total_amount - invoice.paid_amount
+  // الربح الصافي: ربح الأسطر ناقص ربح المرتجعات (قيمتها ناقص تكلفتها)
+  const totalProfit = items.reduce((s, i) => s + i.profit, 0) - (returnsTotal - returnsCost)
+  const netSales = invoice.total_amount - returnsTotal
+  const margin = netSales > 0 ? (totalProfit / netSales) * 100 : 0
+  const remaining = Math.max(invoice.total_amount - invoice.paid_amount - returnsTotal, 0)
   const bestSelling = [...items].sort((a, b) => b.quantity - a.quantity)[0]
 
   const paymentStatusLabel = { paid: 'مدفوعة بالكامل', partial: 'مدفوعة جزئيًا', unpaid: 'غير مدفوعة' }[invoice.payment_status]
@@ -100,6 +116,7 @@ export default function SaleReport() {
           { 'البيان': 'التاريخ', 'القيمة': new Date(invoice.created_at).toLocaleString('ar-EG') },
           { 'البيان': 'الإجمالي', 'القيمة': invoice.total_amount.toFixed(2) },
           { 'البيان': 'الخصم', 'القيمة': invoice.discount_amount.toFixed(2) },
+          { 'البيان': 'المرتجعات', 'القيمة': returnsTotal.toFixed(2) },
           { 'البيان': 'المدفوع', 'القيمة': invoice.paid_amount.toFixed(2) },
           { 'البيان': 'المتبقي', 'القيمة': remaining.toFixed(2) },
           { 'البيان': 'حالة السداد', 'القيمة': paymentStatusLabel },
@@ -163,6 +180,10 @@ export default function SaleReport() {
           <p className="font-mono-data font-bold text-lg text-emerald-600">{totalProfit.toFixed(2)}</p>
         </div>
       </div>
+
+      {returnsTotal > 0 && (
+        <p className="text-sm text-amber-700 mb-2">فيه مرتجعات على الفاتورة دي بقيمة {returnsTotal.toFixed(2)}، والربح المعروض صافي بعد خصمها.</p>
+      )}
 
       {remaining > 0 && (
         <p className="text-sm text-red-600 mb-2">متبقي على العميل من الفاتورة دي: {remaining.toFixed(2)}</p>
