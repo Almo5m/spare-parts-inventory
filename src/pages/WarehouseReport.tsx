@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Loader2, ArrowRight, AlertTriangle } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { netRatio } from '../lib/money'
 import { fetchAll } from '../lib/fetchAll'
 import type { Database } from '../lib/database.types'
 
@@ -23,7 +24,8 @@ export default function WarehouseReport() {
     Promise.all([
       supabase.from('warehouses').select('*').eq('id', id).single(),
       fetchAll((from, to) => supabase.from('inventory').select('quantity, products(part_number, name, min_stock_alert)').eq('warehouse_id', id).order('product_id').range(from, to)),
-      fetchAll((from, to) => supabase.from('sales_invoices').select('total_amount').eq('warehouse_id', id).order('id').range(from, to)),
+      // مبيعات المخزن = أسطر الفواتير اللي اتباعت من المخزن ده (الفاتورة الواحدة ممكن تكون من أكتر من مخزن)، بعد توزيع الخصم
+      fetchAll((from, to) => supabase.from('sales_invoice_items').select('line_total, sales_invoices!inner(total_amount, discount_amount)').eq('warehouse_id', id).order('id').range(from, to)),
       fetchAll((from, to) => supabase.from('orders').select('total_cost').eq('warehouse_id', id).order('id').range(from, to)),
     ]).then(([w, inv, sales, orders]) => {
       if (cancelled) return
@@ -41,7 +43,12 @@ export default function WarehouseReport() {
         })
       )
 
-      setTotalSales((sales.data ?? []).reduce((s, i) => s + i.total_amount, 0))
+      setTotalSales(
+        (sales.data ?? []).reduce((s, i) => {
+          const inv = i.sales_invoices as unknown as { total_amount: number; discount_amount: number } | null
+          return s + i.line_total * (inv ? netRatio(inv.total_amount, inv.discount_amount) : 1)
+        }, 0)
+      )
       setTotalOrdersCost((orders.data ?? []).reduce((s, i) => s + i.total_cost, 0))
       setLoading(false)
     })

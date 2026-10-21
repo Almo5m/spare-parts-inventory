@@ -775,6 +775,130 @@ check(
 
 
 # ---------------------------------------------------------------
+# فاتورة بيع من أكتر من مخزن (migration 20261018000001)
+print("== فاتورة من أكتر من مخزن ==")
+
+db5 = Db(ALL)
+db5.run(SEED, strict=True)
+db5.run("insert into public.warehouses (name) values ('الفرع');")
+WH2 = db5.value("select id from public.warehouses where name = 'الفرع'")
+db5.as_user(f"select public.create_order('{WH}','a',{order_items(10, 100)},0);")
+db5.as_user(f"select public.create_order('{WH2}','b',{order_items(10, 100)},0);")
+
+
+def wh_line(wh, qty, price=200):
+    return (
+        f"jsonb_build_object('product_id','{PRODUCT}','warehouse_id','{wh}',"
+        f"'unit_name','قطعة','conversion_factor',1,"
+        f"'quantity',{qty},'unit_price',{price})"
+    )
+
+
+def wh_qty(wh):
+    return db5.value(
+        f"select quantity from public.inventory "
+        f"where warehouse_id = '{wh}' and product_id = '{PRODUCT}'"
+    )
+
+
+multi = f"jsonb_build_array({wh_line(WH, 4)},{wh_line(WH2, 3)})"
+
+ok, msg = db5.as_user(
+    f"select public.create_sale_invoice('{CUSTOMER}','{WH}',{multi},1400,0);"
+)
+check("فاتورة فيها أصناف من مخزنين مقبولة", ok, msg[-200:])
+check(
+    "كل مخزن اتخصم منه كميته بس (6 و 7)",
+    wh_qty(WH).startswith("6") and wh_qty(WH2).startswith("7"),
+)
+check(
+    "أسطر الفاتورة مسجّل عليها مخزنين مختلفين",
+    db5.value("select count(distinct warehouse_id) from public.sales_invoice_items") == "2",
+)
+check(
+    "دفعات كل مخزن اتسحب منها بس",
+    db5.value(
+        "select count(*) from public.sale_item_lot_usage u "
+        "join public.inventory_lots l on l.id = u.lot_id "
+        f"where l.warehouse_id = '{WH2}'"
+    ) == "1",
+)
+
+# الكمية الزيادة في مخزن واحد مرفوضة حتى لو المجموع الكلي كفاية
+too_much = f"jsonb_build_array({wh_line(WH, 7)})"
+ok, _ = db5.as_user(
+    f"select public.create_sale_invoice('{CUSTOMER}','{WH}',{too_much},0,0);"
+)
+check("بيع كمية أكبر من رصيد المخزن المحدد مرفوض (حتى لو المخزن التاني فيه)", not ok)
+
+ok, _ = db5.as_user(
+    "select public.create_sale_invoice(null,"
+    f"'{WH}',jsonb_build_array({wh_line('99999999-9999-9999-9999-999999999999', 1)}),200,0);"
+)
+check("مخزن غير موجود على السطر مرفوض", not ok)
+
+# سطر من غير warehouse_id بيتباع من مخزن الفاتورة (النداءات القديمة)
+legacy = (
+    f"jsonb_build_array(jsonb_build_object('product_id','{PRODUCT}','unit_name','قطعة',"
+    f"'conversion_factor',1,'quantity',1,'unit_price',200))"
+)
+ok, msg = db5.as_user(
+    f"select public.create_sale_invoice(null,'{WH2}',{legacy},200,0);"
+)
+check(
+    "سطر من غير مخزن بيتباع من مخزن الفاتورة",
+    ok and wh_qty(WH2).startswith("6"),
+    msg[-200:],
+)
+
+# إلغاء الفاتورة بيرجّع كل صنف لمخزنه
+ok, msg = db5.as_user(
+    "select public.void_sale_invoice(id) from public.sales_invoices "
+    "where total_amount = 1400;"
+)
+check(
+    "إلغاء الفاتورة متعددة المخازن بيرجّع كل مخزن لكميته (10 و 9: الفرعي كان 6 بعد بيعة السطر القديم)",
+    ok and wh_qty(WH).startswith("10") and wh_qty(WH2).startswith("9"),
+    msg[-200:],
+)
+
+# مرتجع من فاتورة متعددة المخازن
+db5.as_user(
+    f"select public.create_sale_invoice('{CUSTOMER}','{WH}',{multi},1400,0);"
+)
+inv_multi = "(select id from public.sales_invoices where total_amount = 1400)"
+
+
+def ret_wh(qty, wh=None):
+    extra = f",'warehouse_id','{wh}'" if wh else ""
+    return (
+        f"jsonb_build_array(jsonb_build_object('product_id','{PRODUCT}',"
+        f"'unit_name','قطعة','quantity',{qty}{extra}))"
+    )
+
+
+ok, _ = db5.as_user(
+    f"select public.create_sales_return({inv_multi},{ret_wh(1)},'x');"
+)
+check("مرتجع من غير تحديد المخزن مرفوض لو الصنف اتباع من مخزنين", not ok)
+
+ok, _ = db5.as_user(
+    f"select public.create_sales_return({inv_multi},{ret_wh(4, WH2)},'x');"
+)
+check("مرتجع أكبر من المباع من المخزن المحدد (3) مرفوض", not ok)
+
+wh_before = (wh_qty(WH), wh_qty(WH2))
+ok, msg = db5.as_user(
+    f"select public.create_sales_return({inv_multi},{ret_wh(2, WH2)},'x');"
+)
+check(
+    "مرتجع 2 للمخزن الفرعي بيرجع له هو بس",
+    ok and wh_qty(WH) == wh_before[0] and wh_qty(WH2) != wh_before[1],
+    msg[-200:],
+)
+
+
+# ---------------------------------------------------------------
 print()
 
 print(

@@ -45,7 +45,7 @@ export default function SaleReport() {
         invoiceData.customer_id
           ? supabase.from('customers').select('name').eq('id', invoiceData.customer_id).single()
           : Promise.resolve({ data: null }),
-        supabase.from('warehouses').select('name').eq('id', invoiceData.warehouse_id).single(),
+        supabase.from('warehouses').select('id, name'),
         supabase.from('sales_invoice_items').select('*').eq('invoice_id', invoiceId),
         fetchAll((from, to) => supabase.from('products').select('id, name').order('id').range(from, to)),
       ])
@@ -53,7 +53,13 @@ export default function SaleReport() {
       if (cancelled) return
 
       if (customerRes.data) setCustomerName(customerRes.data.name)
-      setWarehouseName(warehouseRes.data?.name ?? '-')
+      // الفاتورة ممكن تكون من أكتر من مخزن: بنعرض أسماء المخازن اللي اتباعت منها أصنافها
+      const warehouseNames = Object.fromEntries((warehouseRes.data ?? []).map((w) => [w.id, w.name]))
+      const usedWarehouses = [...new Set((itemsRes.data ?? []).map((i) => i.warehouse_id))]
+      setWarehouseName(
+        usedWarehouses.map((id) => warehouseNames[id] ?? '-').join('، ') ||
+        warehouseNames[invoiceData.warehouse_id] || '-'
+      )
 
       const productMap = Object.fromEntries((productsRes.data ?? []).map((p) => [p.id, p.name]))
 

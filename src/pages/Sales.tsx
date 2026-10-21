@@ -18,6 +18,8 @@ type Warehouse = Database['public']['Tables']['warehouses']['Row']
 
 interface CartItem {
   product_id: string
+  // المخزن اللي الصنف ده هيتباع منه (الفاتورة الواحدة ممكن يبقى فيها أصناف من أكتر من مخزن)
+  warehouse_id: string
   product_name: string
   unit_name: string
   conversion_factor: number
@@ -58,7 +60,10 @@ export default function Sales() {
   const [customerId, setCustomerId] = useState(draft.customerId)
   const [paidAmount, setPaidAmount] = useState(draft.paidAmount)
   const [discount, setDiscount] = useState(draft.discount)
-  const [cart, setCart] = useState<CartItem[]>(draft.cart)
+  // مسودات قديمة كانت من غير مخزن على السطر، فبنعتبر مخزن المسودة هو مخزن كل أسطرها
+  const [cart, setCart] = useState<CartItem[]>(
+    draft.cart.map((i) => ({ ...i, warehouse_id: i.warehouse_id ?? draft.warehouseId }))
+  )
 
   const [picker, setPicker] = useState({
     product_id: '',
@@ -177,6 +182,7 @@ export default function Sales() {
       ...cart,
       {
         product_id: selectedProduct.id,
+        warehouse_id: warehouseId,
         product_name: selectedProduct.name,
         unit_name: unit.unit_name,
         conversion_factor: unit.conversion_factor,
@@ -241,9 +247,11 @@ export default function Sales() {
 
     const { data: invoiceId, error } = await supabase.rpc('create_sale_invoice', {
       p_customer_id: nullableArg(customerId || null),
-      p_warehouse_id: warehouseId,
+      // مخزن الفاتورة الأساسي = مخزن أول صنف، وكل سطر بيتباع من مخزنه
+      p_warehouse_id: cart[0].warehouse_id,
       p_items: cart.map((item) => ({
         product_id: item.product_id,
+        warehouse_id: item.warehouse_id,
         unit_name: item.unit_name,
         conversion_factor: item.conversion_factor,
         quantity: item.quantity,
@@ -323,23 +331,35 @@ export default function Sales() {
       </div>
 
       <div className="card p-5 md:p-6 mb-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Select
-          value={warehouseId}
-          onChange={(e) => {
-            setWarehouseId(e.target.value)
-            setCart([])
-          }}
-        >
-          {warehouses.map((w) => (
-            <option key={w.id} value={w.id}>{w.name}{w.is_default ? ' (افتراضي)' : ''}</option>
-          ))}
-        </Select>
-        <Select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
-          <option value="">عميل نقدي (بدون تسجيل)</option>
-          {customers.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </Select>
+        <div>
+          <label className="block text-xs text-slate-500 mb-1.5">المخزن اللي بتضيف منه الأصناف</label>
+          <Select
+            value={warehouseId}
+            onChange={(e) => {
+              // الأصناف اللي في الفاتورة بتفضل زي ما هي (كل سطر مربوط بمخزنه)، والمنتقي بس هو اللي بيتصفّر
+              setWarehouseId(e.target.value)
+              setPicker({ product_id: '', unit_name: 'قطعة', quantity: '1', unit_price: '' })
+            }}
+          >
+            {warehouses.map((w) => (
+              <option key={w.id} value={w.id}>{w.name}{w.is_default ? ' (افتراضي)' : ''}</option>
+            ))}
+          </Select>
+          {new Set(cart.map((i) => i.warehouse_id)).size > 1 && (
+            <p className="text-xs text-accent-dark mt-1.5">
+              الفاتورة دي فيها أصناف من {new Set(cart.map((i) => i.warehouse_id)).size} مخازن، وكل صنف هيتخصم من مخزنه.
+            </p>
+          )}
+        </div>
+        <div>
+          <label className="block text-xs text-slate-500 mb-1.5">العميل</label>
+          <Select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+            <option value="">عميل نقدي (بدون تسجيل)</option>
+            {customers.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </Select>
+        </div>
       </div>
 
       <div className="card p-5 md:p-6 mb-6">
@@ -401,6 +421,7 @@ export default function Sales() {
             <thead className="bg-navy-900 text-white text-sm">
               <tr>
                 <th className="p-3 whitespace-nowrap">الصنف</th>
+                <th className="p-3 whitespace-nowrap">المخزن</th>
                 <th className="p-3 whitespace-nowrap">الوحدة</th>
                 <th className="p-3 whitespace-nowrap">الكمية</th>
                 <th className="p-3 whitespace-nowrap">السعر</th>
@@ -410,11 +431,12 @@ export default function Sales() {
             </thead>
             <tbody>
               {cart.length === 0 ? (
-                <tr><td colSpan={6} className="p-6 text-center text-slate-500">لم تُضف أي أصناف بعد</td></tr>
+                <tr><td colSpan={7} className="p-6 text-center text-slate-500">لم تُضف أي أصناف بعد</td></tr>
               ) : (
                 cart.map((item, i) => (
                   <tr key={i} className="border-t border-border-soft">
                     <td className="p-3 whitespace-nowrap">{item.product_name}</td>
+                    <td className="p-3 whitespace-nowrap text-slate-500">{warehouses.find((w) => w.id === item.warehouse_id)?.name ?? '-'}</td>
                     <td className="p-3 whitespace-nowrap">{item.unit_name}</td>
                     <td className="p-3 font-mono-data whitespace-nowrap">{item.quantity}</td>
                     <td className="p-3 font-mono-data whitespace-nowrap">{item.unit_price}</td>

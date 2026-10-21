@@ -15,13 +15,14 @@ type ProductUnit = Database['public']['Tables']['product_units']['Row']
 // الكمية المتاحة للإرجاع لكل سطر. المرتجعات السابقة بتتحسب لكل (صنف + وحدة) مع بعض،
 // وبتتوزّع على الأسطر بالترتيب، عشان نفس الصنف لو ظهر في سطرين مينقصش مرتين،
 // وعشان كرتونة وقطعة لنفس الصنف مايتحسبوش على بعض.
-function remainingByLine<T extends { product_id: string; unit_name: string; quantity: number }>(
+function remainingByLine<T extends { product_id: string; unit_name: string; quantity: number; warehouse_id?: string }>(
   items: T[],
   returned: Record<string, number>
 ): T[] {
   const left = { ...returned }
   return items.map((it) => {
-    const key = `${it.product_id}|${it.unit_name}`
+    // مرتجعات البيع بتتحسب لكل (صنف + وحدة + مخزن) لأن الفاتورة ممكن تكون من أكتر من مخزن
+    const key = `${it.product_id}|${it.unit_name}|${it.warehouse_id ?? ''}`
     const used = Math.min(left[key] ?? 0, it.quantity)
     left[key] = (left[key] ?? 0) - used
     return { ...it, quantity: it.quantity - used }
@@ -98,7 +99,7 @@ export default function Returns() {
       supabase.from('sales_invoice_items').select('*').eq('invoice_id', invoiceId),
       supabase
         .from('sales_return_items')
-        .select('product_id, unit_name, quantity, sales_returns!inner(sales_invoice_id)')
+        .select('product_id, warehouse_id, unit_name, quantity, sales_returns!inner(sales_invoice_id)')
         .eq('sales_returns.sales_invoice_id', invoiceId),
     ])
 
@@ -106,7 +107,7 @@ export default function Returns() {
     // الكمية اللي لسه متاحة يرجعها فعليًا بدل ما يفاجأ بالرفض
     const returnedMap: Record<string, number> = {}
     for (const r of pastReturns ?? []) {
-      const key = `${r.product_id}|${r.unit_name}`
+      const key = `${r.product_id}|${r.unit_name}|${r.warehouse_id}`
       returnedMap[key] = (returnedMap[key] ?? 0) + Number(r.quantity)
     }
 
@@ -131,7 +132,7 @@ export default function Returns() {
 
     const returnedMap: Record<string, number> = {}
     for (const r of pastReturns ?? []) {
-      const key = `${r.product_id}|${r.unit_name}`
+      const key = `${r.product_id}|${r.unit_name}|`
       returnedMap[key] = (returnedMap[key] ?? 0) + Number(r.quantity)
     }
 
@@ -148,6 +149,8 @@ export default function Returns() {
       .filter((it) => Number(it.returnQty) > 0)
       .map((it) => ({
         product_id: it.product_id,
+        // المرتجع بيرجع للمخزن اللي الصنف اتباع منه
+        warehouse_id: it.warehouse_id,
         unit_name: it.unit_name,
         conversion_factor: getConversionFactor(it.product_id, it.unit_name),
         quantity: Number(it.returnQty),
@@ -292,6 +295,7 @@ export default function Returns() {
                     <thead className="bg-navy-900 text-white text-sm">
                       <tr>
                         <th className="p-3 whitespace-nowrap">الصنف</th>
+                        <th className="p-3 whitespace-nowrap">المخزن</th>
                         <th className="p-3 whitespace-nowrap">الوحدة</th>
                         <th className="p-3 whitespace-nowrap">المتاح للإرجاع</th>
                         <th className="p-3 whitespace-nowrap">السعر</th>
@@ -302,6 +306,7 @@ export default function Returns() {
                       {saleItems.map((it, i) => (
                         <tr key={it.id} className="border-t border-border-soft">
                           <td className="p-3 whitespace-nowrap">{productNames[it.product_id] ?? it.product_id}</td>
+                          <td className="p-3 whitespace-nowrap text-slate-500">{warehouseNames[it.warehouse_id] ?? '-'}</td>
                           <td className="p-3 whitespace-nowrap">{it.unit_name}</td>
                           <td className="p-3 font-mono-data whitespace-nowrap text-slate-500">{it.quantity}</td>
                           <td className="p-3 font-mono-data whitespace-nowrap">{it.unit_price}</td>

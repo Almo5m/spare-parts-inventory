@@ -41,3 +41,4 @@ __pycache__/
 
 # Keep example environment files
 !.env.example
+out/
