@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Printer, FilePlus, Share2 } from 'lucide-react'
+import { Printer, FilePlus, Share2, ArrowRight } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 
 export interface InvoicePrintItem {
@@ -36,9 +36,12 @@ interface CompanySettings {
 export default function InvoicePrint({
   data,
   onNewInvoice,
+  preview = false,
 }: {
   data: InvoicePrintData
   onNewInvoice: () => void
+  // معاينة: الفاتورة اتبنت من السلة ومش محفوظة، فمفيش إرسال، والزر الأساسي بيرجّع للتعديل
+  preview?: boolean
 }) {
   const [settings, setSettings] = useState<CompanySettings | null>(null)
   const remaining = data.total - data.paid
@@ -96,23 +99,36 @@ export default function InvoicePrint({
           <Printer size={16} />
           طباعة / حفظ PDF
         </button>
-        <button
-          onClick={handleShare}
-          className="flex items-center justify-center gap-2 border border-border-soft text-navy-900 rounded-xl px-4 py-2 text-sm font-medium hover:bg-surface transition-colors"
-        >
-          <Share2 size={16} />
-          إرسال ملخص (واتساب)
-        </button>
+        {!preview && (
+          <button
+            onClick={handleShare}
+            className="flex items-center justify-center gap-2 border border-border-soft text-navy-900 rounded-xl px-4 py-2 text-sm font-medium hover:bg-surface transition-colors"
+          >
+            <Share2 size={16} />
+            إرسال ملخص (واتساب)
+          </button>
+        )}
         <button
           onClick={onNewInvoice}
           className="btn-primary flex items-center justify-center gap-2 text-white rounded-xl px-4 py-2 text-sm font-medium transition-all"
         >
-          <FilePlus size={16} />
-          {data.type === 'sale' ? 'فاتورة جديدة' : 'طلبية جديدة'}
+          {preview ? <ArrowRight size={16} /> : <FilePlus size={16} />}
+          {preview ? 'رجوع للتعديل' : data.type === 'sale' ? 'فاتورة جديدة' : 'طلبية جديدة'}
         </button>
       </div>
 
+      {preview && (
+        <p className="no-print max-w-3xl mx-auto mb-4 text-sm bg-amber-50 text-amber-800 border border-amber-200 rounded-xl px-4 py-3">
+          معاينة فقط: الفاتورة لم تُحفظ، ولم يتأثر المخزون أو الحسابات أو رقم الفاتورة التالي.
+        </p>
+      )}
+
       <div className="print-area max-w-3xl mx-auto">
+        {preview && (
+          <p className="text-center text-red-600 font-bold border border-red-300 rounded-lg py-1.5 mb-4 text-sm">
+            نسخة معاينة، غير معتمدة
+          </p>
+        )}
         <div className="flex items-start justify-between gap-4 border-b-4 border-navy-900 pb-4 mb-5">
           <div className="flex items-start gap-3">
             {settings?.logo_data_url && (

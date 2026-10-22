@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Loader2, Trash2, Plus } from 'lucide-react'
+import { Loader2, Trash2, Plus, Eye } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { nullableArg } from '../lib/rpcArgs'
 import { fetchAll } from '../lib/fetchAll'
@@ -55,6 +55,8 @@ export default function Sales() {
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [invoice, setInvoice] = useState<InvoicePrintData | null>(null)
+  // معاينة الفاتورة من السلة من غير حفظ (مفيش أي كتابة في القاعدة)
+  const [previewData, setPreviewData] = useState<InvoicePrintData | null>(null)
 
   const [warehouseId, setWarehouseId] = useState(draft.warehouseId)
   const [customerId, setCustomerId] = useState(draft.customerId)
@@ -212,6 +214,35 @@ export default function Sales() {
     clearDraft(DRAFT_KEY)
   }
 
+  const handlePreview = () => {
+    setError('')
+    if (cart.length === 0) {
+      setError('أضف صنف واحد على الأقل عشان تشوف المعاينة')
+      return
+    }
+    if (discountValue < 0 || discountValue > subtotal) {
+      setError('الخصم لازم يكون بين صفر وإجمالي الفاتورة قبل الخصم')
+      return
+    }
+    setPreviewData({
+      type: 'sale',
+      invoiceNumber: 'معاينة',
+      date: new Date().toLocaleString('ar-EG'),
+      partyName: customers.find((c) => c.id === customerId)?.name ?? 'عميل نقدي',
+      employeeName: profile?.full_name,
+      items: cart.map((item) => ({
+        name: item.product_name,
+        unit: item.unit_name,
+        quantity: item.quantity,
+        price: item.unit_price,
+      })),
+      subtotal,
+      discount: discountValue,
+      total,
+      paid: customerId ? Math.min(round2(Number(paidAmount) || 0), total) : total,
+    })
+  }
+
   const handleSubmit = async () => {
     setError('')
 
@@ -304,6 +335,17 @@ export default function Sales() {
       <div className="p-8 flex items-center gap-2 text-slate-500">
         <Loader2 size={16} className="animate-spin" />
         جاري التحميل...
+      </div>
+    )
+  }
+
+  if (previewData) {
+    return (
+      <div className="page-enter p-4 md:p-6 max-w-4xl mx-auto">
+        <h1 className="font-display text-xl md:text-2xl font-bold text-navy-900 mb-6 no-print">
+          معاينة الفاتورة
+        </h1>
+        <InvoicePrint data={previewData} onNewInvoice={() => setPreviewData(null)} preview />
       </div>
     )
   }
@@ -492,6 +534,15 @@ export default function Sales() {
         )}
 
         {error && <p className="text-red-600 text-sm mb-3">{error}</p>}
+
+        <button
+          onClick={handlePreview}
+          disabled={saving}
+          className="w-full flex items-center justify-center gap-2 border border-border-soft text-navy-900 rounded-xl py-2.5 font-medium mb-2.5 hover:bg-surface transition-colors disabled:opacity-70"
+        >
+          <Eye size={16} />
+          معاينة الفاتورة (من غير حفظ)
+        </button>
 
         <button
           onClick={handleSubmit}

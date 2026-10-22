@@ -3,7 +3,7 @@
 استيراد المخزون الافتتاحي من شيتات Excel (مخزنين) إلى Supabase.
 
 السكريبت مبيكتبش في القاعدة. بيقرا الشيتين، وبيطلّع في فولدر out/:
-  - opening-stock.sql  : ملف SQL يتنفّذ مرة واحدة من SQL Editor (كله في transaction)
+  - opening-stock.sql  : ملف SQL يتنفّذ مرة واحدة من SQL Editor (أمر DO واحد، كله ذرّي)
   - import-review.xlsx : ملف مراجعة (المنتجات والكميات لكل مخزن + اللي اتخطّاه + فروق الأسعار)
 
 شكل كل شيت: عمود الاسم، عمود الكمية بالقطعة، عمود السعر (سعر البيع). أول صف عناوين.
@@ -144,31 +144,73 @@ def apply_price_overrides(rows, overrides):
 
 
 def write_sql(rows, out_path: Path):
+    """
+    الملف كله أمر DO واحد (مفيش begin/commit ولا جداول مؤقتة). السبب: الـ SQL Editor في Supabase
+    مش بيضمن إن الأوامر المتتالية تتنفذ في نفس الجلسة والـ transaction، فالجدول المؤقت كان
+    بيتمسح قبل ما الأمر اللي بعده يستخدمه. أمر DO واحد بيتنفذ ذرّيًا: يا كله يتسجّل يا ولا حاجة.
+    """
     main_rows = [r for r in rows if r["main"]]
     branch_rows = [r for r in rows if r["branch"]]
     main_qty = sum(r["main"]["qty"] for r in main_rows)
     branch_qty = sum(r["branch"]["qty"] for r in branch_rows)
 
-    values = []
-    for r in rows:
-        m, b = r["main"], r["branch"]
-        values.append(
-            "  ({code}, {name}, {pm}, {qm}, {pb}, {qb})".format(
-                code=sql_text(r["code"]),
-                name=sql_text(r["name"]),
-                pm=fmt(m["price"]) if m else "null",
-                qm=fmt(m["qty"]) if m else "null",
-                pb=fmt(b["price"]) if b else "null",
-                qb=fmt(b["qty"]) if b else "null",
-            )
-        )
+    data = [
+        {
+            "code": r["code"],
+            "name": r["name"],
+            "p1": r["main"]["price"] if r["main"] else None,
+            "q1": r["main"]["qty"] if r["main"] else None,
+            "p2": r["branch"]["price"] if r["branch"] else None,
+            "q2": r["branch"]["qty"] if r["branch"] else None,
+        }
+        for r in rows
+    ]
+    # سطر لكل منتج عشان الملف يتقرا ويتراجع بسهولة
+    json_lines = ",\n".join("  " + json.dumps(d, ensure_ascii=False) for d in data)
+    if "$json$" in json_lines:
+        raise SystemExit("اسم صنف فيه الرمز $json$ ومينفعش يتحط في الملف")
+
+    recordset = (
+        "jsonb_to_recordset(v_data) as r(code text, name text, "
+        "p1 numeric, q1 numeric, p2 numeric, q2 numeric)"
+    )
+
+    def warehouse_block(n: int) -> str:
+        return f"""
+  -- {WAREHOUSE_NAMES[n - 1]}: الرصيد + جرد افتتاحي + دفعات + حركات
+  insert into public.inventory (product_id, warehouse_id, quantity)
+  select p.id, v_wh{n}, r.q{n}
+  from {recordset}
+  join public.products p on p.part_number = r.code
+  where r.q{n} is not null;
+
+  insert into public.stocktake_items (stocktake_id, product_id, system_quantity, counted_quantity, difference)
+  select v_st{n}, p.id, 0, r.q{n}, r.q{n}
+  from {recordset}
+  join public.products p on p.part_number = r.code
+  where r.q{n} is not null;
+
+  insert into public.inventory_lots
+    (product_id, warehouse_id, source_type, source_id, unit_cost, quantity_received, quantity_remaining, default_sale_price)
+  select p.id, v_wh{n}, 'stocktake', v_st{n}, 0, r.q{n}, r.q{n}, r.p{n}
+  from {recordset}
+  join public.products p on p.part_number = r.code
+  where r.q{n} is not null;
+
+  insert into public.inventory_movements (product_id, warehouse_id, movement_type, quantity, reference_id)
+  select p.id, v_wh{n}, 'adjustment'::public.inventory_movement_type, r.q{n}, v_st{n}
+  from {recordset}
+  join public.products p on p.part_number = r.code
+  where r.q{n} is not null;
+"""
 
     sql = f"""-- ============================================================================
 -- استيراد المخزون الافتتاحي (اتولّد بـ scripts/import_opening_stock.py)
 -- {len(rows)} منتج | {WAREHOUSE_NAMES[0]}: {len(main_rows)} صنف ({fmt(main_qty)} قطعة) | {WAREHOUSE_NAMES[1]}: {len(branch_rows)} صنف ({fmt(branch_qty)} قطعة)
 --
 -- شغّله مرة واحدة من Supabase > SQL Editor، على قاعدة فاضية (بعد تطبيق كل الـ migrations).
--- كله في transaction: لو أي حاجة اتخالفت (أعداد أو مجاميع) بيتلغي كله ومفيش حاجة بتتسجّل.
+-- الملف كله أمر DO واحد: لو أي حاجة اتخالفت (أعداد أو مجاميع) كله بيتلغي ومفيش حاجة بتتسجّل.
+-- ماتضيفش begin/commit ومتقسّمهوش على أكتر من تشغيل.
 -- سعر الشراء = صفر لكل الأصناف (مش معروف لسه). الدفعات الافتتاحية معلّمة بالملاحظة:
 --   '{OPENING_NOTE}'
 -- عشان نصلّح تكلفتها بعدين بسكريبت إعادة التكلفة.
@@ -176,93 +218,40 @@ def write_sql(rows, out_path: Path):
 -- سعر كل مخزن محفوظ على دفعاته (default_sale_price) وشاشة البيع بتقترحه.
 -- ============================================================================
 
-begin;
-
-do $$
-begin
-  if exists (select 1 from public.products) or exists (select 1 from public.warehouses) then
-    raise exception 'القاعدة فيها منتجات أو مخازن بالفعل. الملف ده للاستيراد الأول بس';
-  end if;
-end $$;
-
--- المخازن
-create temp table _wh (code int, id uuid) on commit drop;
-with w as (
-  insert into public.warehouses (name, is_default)
-  values ({sql_text(WAREHOUSE_NAMES[0])}, true), ({sql_text(WAREHOUSE_NAMES[1])}, false)
-  returning id, name
-)
-insert into _wh select case name when {sql_text(WAREHOUSE_NAMES[0])} then 1 else 2 end, id from w;
-
--- البيانات المصدر (كود، اسم، سعر وكمية كل مخزن)
-create temp table _imp (
-  code text, name text,
-  price_1 numeric, qty_1 numeric,
-  price_2 numeric, qty_2 numeric
-) on commit drop;
-
-insert into _imp values
-{(","+chr(10)).join(values)};
-
--- المنتجات
-insert into public.products (part_number, name, base_unit, cost_price, sale_price)
-select code, name, 'قطعة', 0, coalesce(price_1, price_2) from _imp;
-
--- الرصيد لكل مخزن
-create temp table _stock on commit drop as
-  select 1 as wcode, code, qty_1 as qty, price_1 as price from _imp where qty_1 is not null
-  union all
-  select 2, code, qty_2, price_2 from _imp where qty_2 is not null;
-
--- جرد افتتاحي لكل مخزن (بيعلّم الدفعات عشان تتصلّح تكلفتها بعدين)
-create temp table _st (wcode int, id uuid) on commit drop;
-with s as (
-  insert into public.stocktakes (warehouse_id, notes)
-  select id, {sql_text(OPENING_NOTE)} from _wh
-  returning id, warehouse_id
-)
-insert into _st select (select code from _wh where _wh.id = s.warehouse_id), id from s;
-
-insert into public.inventory (product_id, warehouse_id, quantity)
-select p.id, w.id, s.qty
-from _stock s
-join public.products p on p.part_number = s.code
-join _wh w on w.code = s.wcode;
-
-insert into public.stocktake_items (stocktake_id, product_id, system_quantity, counted_quantity, difference)
-select st.id, p.id, 0, s.qty, s.qty
-from _stock s
-join public.products p on p.part_number = s.code
-join _st st on st.wcode = s.wcode;
-
-insert into public.inventory_lots
-  (product_id, warehouse_id, source_type, source_id, unit_cost, quantity_received, quantity_remaining, default_sale_price)
-select p.id, w.id, 'stocktake', st.id, 0, s.qty, s.qty, s.price
-from _stock s
-join public.products p on p.part_number = s.code
-join _wh w on w.code = s.wcode
-join _st st on st.wcode = s.wcode;
-
-insert into public.inventory_movements (product_id, warehouse_id, movement_type, quantity, reference_id)
-select p.id, w.id, 'adjustment', s.qty, st.id
-from _stock s
-join public.products p on p.part_number = s.code
-join _wh w on w.code = s.wcode
-join _st st on st.wcode = s.wcode;
-
--- مطابقة نهائية: لو أي رقم مختلف عن الشيت، الـ transaction كلها بتتلغي
-do $$
+do $import$
 declare
+  v_wh1 uuid; v_wh2 uuid;
+  v_st1 uuid; v_st2 uuid;
   v_products int;
   v_inv_1 int; v_inv_2 int;
   v_qty_1 numeric; v_qty_2 numeric;
   v_lots int; v_mov int;
+  -- كل منتج: كود، اسم، (سعر، كمية) مخزن 1، (سعر، كمية) مخزن 2
+  v_data jsonb := $json$[
+{json_lines}
+]$json$::jsonb;
 begin
+  if exists (select 1 from public.products) or exists (select 1 from public.warehouses) then
+    raise exception 'القاعدة فيها منتجات أو مخازن بالفعل. الملف ده للاستيراد الأول بس';
+  end if;
+
+  -- المخازن
+  insert into public.warehouses (name, is_default) values ({sql_text(WAREHOUSE_NAMES[0])}, true) returning id into v_wh1;
+  insert into public.warehouses (name, is_default) values ({sql_text(WAREHOUSE_NAMES[1])}, false) returning id into v_wh2;
+
+  -- المنتجات
+  insert into public.products (part_number, name, base_unit, cost_price, sale_price)
+  select r.code, r.name, 'قطعة', 0, coalesce(r.p1, r.p2)
+  from {recordset};
+
+  -- جرد افتتاحي لكل مخزن (بيعلّم الدفعات عشان تتصلّح تكلفتها بعدين)
+  insert into public.stocktakes (warehouse_id, notes) values (v_wh1, {sql_text(OPENING_NOTE)}) returning id into v_st1;
+  insert into public.stocktakes (warehouse_id, notes) values (v_wh2, {sql_text(OPENING_NOTE)}) returning id into v_st2;
+{warehouse_block(1)}{warehouse_block(2)}
+  -- مطابقة نهائية: لو أي رقم مختلف عن الشيت، العملية كلها بتتلغي
   select count(*) into v_products from public.products;
-  select count(*), coalesce(sum(quantity), 0) into v_inv_1, v_qty_1
-    from public.inventory i join _wh w on w.id = i.warehouse_id and w.code = 1;
-  select count(*), coalesce(sum(quantity), 0) into v_inv_2, v_qty_2
-    from public.inventory i join _wh w on w.id = i.warehouse_id and w.code = 2;
+  select count(*), coalesce(sum(quantity), 0) into v_inv_1, v_qty_1 from public.inventory where warehouse_id = v_wh1;
+  select count(*), coalesce(sum(quantity), 0) into v_inv_2, v_qty_2 from public.inventory where warehouse_id = v_wh2;
   select count(*) into v_lots from public.inventory_lots where source_type = 'stocktake';
   select count(*) into v_mov from public.inventory_movements where movement_type = 'adjustment';
 
@@ -273,9 +262,11 @@ begin
     raise exception 'المطابقة فشلت: منتجات %, مخزن1 % صنف / % قطعة, مخزن2 % صنف / % قطعة',
       v_products, v_inv_1, v_qty_1, v_inv_2, v_qty_2;
   end if;
-end $$;
 
-commit;
+  raise notice 'تم الاستيراد: % منتج | مخزن 1: % صنف (% قطعة) | مخزن 2: % صنف (% قطعة)',
+    v_products, v_inv_1, v_qty_1, v_inv_2, v_qty_2;
+end
+$import$;
 
 -- بعد التنفيذ: راجع الأعداد من واجهة النظام (صفحة المخازن والمنتجات).
 """
