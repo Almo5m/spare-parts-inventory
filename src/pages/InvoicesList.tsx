@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Loader2, Eye, XCircle, FileSpreadsheet, BarChart3 } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { invoicePartyName } from '../lib/party'
 import { fetchAll } from '../lib/fetchAll'
 import { exportToExcel } from '../lib/exportExcel'
 import type { Database } from '../lib/database.types'
@@ -77,7 +78,7 @@ export default function InvoicesList() {
       type: 'sale',
       invoiceNumber: invoice.invoice_number,
       date: new Date(invoice.created_at).toLocaleString('ar-EG'),
-      partyName: customerNames[invoice.customer_id ?? ''] ?? 'عميل نقدي',
+      partyName: invoicePartyName(customerNames[invoice.customer_id ?? ''], invoice.customer_name),
       employeeName: invoice.created_by ? userNames[invoice.created_by] : undefined,
       items: (items ?? []).map((it) => ({
         name: productNames[it.product_id] ?? it.product_id,
@@ -161,7 +162,7 @@ export default function InvoicesList() {
       tab === 'sales'
         ? salesInvoices.map((inv) => ({
             'رقم الفاتورة': inv.invoice_number,
-            'العميل': customerNames[inv.customer_id ?? ''] ?? 'عميل نقدي',
+            'العميل': invoicePartyName(customerNames[inv.customer_id ?? ''], inv.customer_name),
             'الموظف': inv.created_by ? userNames[inv.created_by] ?? '-' : '-',
             'التاريخ': new Date(inv.created_at).toLocaleDateString('ar-EG'),
             'الخصم': inv.discount_amount ?? 0,
@@ -286,7 +287,7 @@ export default function InvoicesList() {
                   salesInvoices.map((inv) => (
                     <tr key={inv.id} className="border-t border-border-soft hover:bg-surface transition-colors">
                       <td className="p-3 font-mono-data whitespace-nowrap">{inv.invoice_number}</td>
-                      <td className="p-3 whitespace-nowrap">{customerNames[inv.customer_id ?? ''] ?? 'عميل نقدي'}</td>
+                      <td className="p-3 whitespace-nowrap">{invoicePartyName(customerNames[inv.customer_id ?? ''], inv.customer_name)}</td>
                       <td className="p-3 whitespace-nowrap text-slate-500">{new Date(inv.created_at).toLocaleDateString('ar-EG')}</td>
                       <td className="p-3 font-mono-data whitespace-nowrap">{inv.total_amount}</td>
                       <td className={`p-3 whitespace-nowrap font-medium ${statusColor[inv.payment_status]}`}>{statusLabel[inv.payment_status]}</td>

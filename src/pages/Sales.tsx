@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabaseClient'
 import { nullableArg } from '../lib/rpcArgs'
 import { fetchAll } from '../lib/fetchAll'
 import { round2, lineTotal } from '../lib/money'
+import { invoicePartyName } from '../lib/party'
 import { loadDraft, saveDraft, clearDraft } from '../lib/draft'
 import { useAuth } from '../context/useAuth'
 import Select from '../components/Select'
@@ -57,6 +58,8 @@ export default function Sales() {
   const [invoice, setInvoice] = useState<InvoicePrintData | null>(null)
   // معاينة الفاتورة من السلة من غير حفظ (مفيش أي كتابة في القاعدة)
   const [previewData, setPreviewData] = useState<InvoicePrintData | null>(null)
+  // اسم العميل النقدي: مش حساب، بس عشان نعرف الفاتورة كانت لمين
+  const [cashCustomerName, setCashCustomerName] = useState('')
 
   const [warehouseId, setWarehouseId] = useState(draft.warehouseId)
   const [customerId, setCustomerId] = useState(draft.customerId)
@@ -210,6 +213,7 @@ export default function Sales() {
     setPaidAmount('')
     setDiscount('')
     setCustomerId('')
+    setCashCustomerName('')
     setError('')
     clearDraft(DRAFT_KEY)
   }
@@ -228,7 +232,7 @@ export default function Sales() {
       type: 'sale',
       invoiceNumber: 'معاينة',
       date: new Date().toLocaleString('ar-EG'),
-      partyName: customers.find((c) => c.id === customerId)?.name ?? 'عميل نقدي',
+      partyName: invoicePartyName(customers.find((c) => c.id === customerId)?.name, cashCustomerName),
       employeeName: profile?.full_name,
       items: cart.map((item) => ({
         name: item.product_name,
@@ -252,6 +256,10 @@ export default function Sales() {
     }
     if (!warehouseId) {
       setError('اختر المخزن')
+      return
+    }
+    if (!customerId && !cashCustomerName.trim()) {
+      setError('اكتب اسم العميل (حتى لو نقدي) عشان نعرف الفاتورة دي كانت لمين')
       return
     }
     if (Number(paidAmount) < 0) {
@@ -290,6 +298,7 @@ export default function Sales() {
       })),
       p_paid_amount: paid,
       p_discount_amount: discountValue,
+      p_customer_name: nullableArg(customerId ? null : cashCustomerName.trim()),
     })
 
     if (error) {
@@ -304,7 +313,7 @@ export default function Sales() {
       .eq('id', invoiceId)
       .single()
 
-    const customerName = customers.find((c) => c.id === customerId)?.name ?? 'عميل نقدي'
+    const customerName = invoicePartyName(customers.find((c) => c.id === customerId)?.name, cashCustomerName)
 
     setInvoice({
       type: 'sale',
@@ -401,6 +410,16 @@ export default function Sales() {
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </Select>
+          {!customerId && (
+            <input
+              type="text"
+              value={cashCustomerName}
+              onChange={(e) => setCashCustomerName(e.target.value)}
+              maxLength={120}
+              placeholder="اسم العميل (مطلوب حتى لو نقدي)"
+              className="w-full border border-border-soft rounded-xl px-3 py-2.5 mt-2 focus:outline-none focus:ring-2 focus:ring-accent"
+            />
+          )}
         </div>
       </div>
 

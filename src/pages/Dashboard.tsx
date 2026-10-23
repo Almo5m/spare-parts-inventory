@@ -4,6 +4,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { supabase } from '../lib/supabaseClient'
 import { fetchAll } from '../lib/fetchAll'
 import { round2, netRatio, localDayKey } from '../lib/money'
+import { invoicePartyName } from '../lib/party'
 import { getPeriodRange, periodLabels, type PeriodType } from '../lib/dateRanges'
 import PeriodSelector from '../components/PeriodSelector'
 
@@ -163,7 +164,7 @@ export default function Dashboard() {
       const combined: LatestInvoice[] = [
         ...sales.map((s) => ({
           invoice_number: s.invoice_number, type: 'بيع' as const,
-          party: s.customer_id ? customerMap[s.customer_id] ?? 'عميل نقدي' : 'عميل نقدي',
+          party: invoicePartyName(s.customer_id ? customerMap[s.customer_id] : undefined, s.customer_name),
           total: s.total_amount, date: s.created_at,
         })),
         ...orders.map((o) => ({

@@ -4,6 +4,7 @@ import { Loader2, ArrowRight, FileSpreadsheet } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { fetchAll } from '../lib/fetchAll'
 import { netRatio } from '../lib/money'
+import { invoicePartyName } from '../lib/party'
 import { exportMultiSheetExcel } from '../lib/exportExcel'
 import type { Database } from '../lib/database.types'
 
@@ -52,7 +53,7 @@ export default function SaleReport() {
 
       if (cancelled) return
 
-      if (customerRes.data) setCustomerName(customerRes.data.name)
+      setCustomerName(invoicePartyName(customerRes.data?.name, invoiceData.customer_name))
       // الفاتورة ممكن تكون من أكتر من مخزن: بنعرض أسماء المخازن اللي اتباعت منها أصنافها
       const warehouseNames = Object.fromEntries((warehouseRes.data ?? []).map((w) => [w.id, w.name]))
       const usedWarehouses = [...new Set((itemsRes.data ?? []).map((i) => i.warehouse_id))]

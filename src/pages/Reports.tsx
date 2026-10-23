@@ -4,6 +4,7 @@ import { Loader2, FileSpreadsheet, BarChart3, Lightbulb } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { fetchAll } from '../lib/fetchAll'
 import { netRatio } from '../lib/money'
+import { invoicePartyName } from '../lib/party'
 import { exportMultiSheetExcel } from '../lib/exportExcel'
 import { exportWarehouseInventory } from '../lib/exportInventory'
 import { getPeriodRange, type PeriodType } from '../lib/dateRanges'
@@ -62,7 +63,7 @@ export default function Reports() {
         ])
         setRows(list.map((i) => ({
           'رقم الفاتورة': i.invoice_number,
-          'العميل': (i.customers as unknown as { name: string } | null)?.name ?? 'عميل نقدي',
+          'العميل': invoicePartyName((i.customers as unknown as { name: string } | null)?.name, i.customer_name),
           'التاريخ': new Date(i.created_at).toLocaleDateString('ar-EG'),
           'الإجمالي': i.total_amount,
         })))

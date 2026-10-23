@@ -899,6 +899,54 @@ check(
 
 
 # ---------------------------------------------------------------
+# اسم العميل النقدي على الفاتورة (migration 20261022000001)
+print("== اسم العميل النقدي ==")
+
+named_line = (
+    f"jsonb_build_array(jsonb_build_object('product_id','{PRODUCT}','unit_name','قطعة',"
+    f"'conversion_factor',1,'quantity',1,'unit_price',200))"
+)
+
+ok, msg = db5.as_user(
+    f"select public.create_sale_invoice(null,'{WH}',{named_line},200,0,'أحمد علي');"
+)
+check(
+    "فاتورة نقدية بتحفظ اسم العميل",
+    ok and db5.value(
+        "select customer_name from public.sales_invoices "
+        "where customer_name is not null and customer_id is null"
+    ) == "أحمد علي",
+    msg[-200:],
+)
+
+ok, _ = db5.as_user(
+    f"select public.create_sale_invoice('{CUSTOMER}','{WH}',{named_line},200,0,'اسم مكتوب بالغلط');"
+)
+check(
+    "لو فيه عميل مسجّل الاسم المكتوب بيتتجاهل",
+    ok and db5.value(
+        "select count(*) from public.sales_invoices "
+        "where customer_id is not null and customer_name is not null"
+    ) == "0",
+)
+
+ok, _ = db5.as_user(
+    f"select public.create_sale_invoice(null,'{WH}',{named_line},200,0,repeat('ا',150));"
+)
+check(
+    "الاسم الأطول من 120 حرف بيتقص",
+    ok and db5.value(
+        "select max(char_length(customer_name)) from public.sales_invoices"
+    ) == "120",
+)
+
+ok, _ = db5.as_user(
+    f"select public.create_sale_invoice(null,'{WH}',{named_line},200,0);"
+)
+check("النداء القديم من غير اسم لسه شغال", ok)
+
+
+# ---------------------------------------------------------------
 print()
 
 print(

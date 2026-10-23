@@ -192,47 +192,42 @@ export default function InvoicePrint({
           </table>
         </div>
 
-        <div className="flex justify-start mb-5">
-          <div className="w-full sm:w-72 text-sm border border-border-soft rounded-xl overflow-hidden">
+        <div className="mb-6">
+          <div className="w-full text-sm md:text-base border border-border-soft rounded-xl overflow-hidden">
             {discount > 0 && (
               <>
-                <div className="flex justify-between px-4 py-2.5 border-b border-border-soft">
+                <div className="flex justify-between px-5 py-3 border-b border-border-soft">
                   <span className="text-slate-500">الإجمالي قبل الخصم</span>
                   <span className="font-mono-data">{fmt(subtotal)}</span>
                 </div>
-                <div className="flex justify-between px-4 py-2.5 border-b border-border-soft text-red-600">
+                <div className="flex justify-between px-5 py-3 border-b border-border-soft text-red-600">
                   <span>الخصم</span>
                   <span className="font-mono-data">-{fmt(discount)}</span>
                 </div>
               </>
             )}
-            <div className="flex justify-between px-4 py-2.5 border-b border-border-soft">
+            <div className="flex justify-between px-5 py-3 border-b border-border-soft">
               <span className="font-bold text-navy-900">الإجمالي</span>
               <span className="font-mono-data font-medium">{fmt(data.total)}</span>
             </div>
             {data.type === 'sale' ? (
               <>
-                <div className="flex justify-between px-4 py-2.5 border-b border-border-soft">
+                <div className="flex justify-between px-5 py-3 border-b border-border-soft">
                   <span className="text-slate-500">المدفوع</span>
                   <span className="font-mono-data font-medium">{fmt(data.paid)}</span>
                 </div>
-                <div className="flex justify-between px-4 py-2.5 bg-surface">
+                <div className="flex justify-between px-5 py-3 bg-surface">
                   <span className="font-bold text-navy-900">المتبقي</span>
                   <span className="font-mono-data font-bold text-navy-900">{fmt(Math.max(remaining, 0))}</span>
                 </div>
               </>
             ) : (
-              <div className="flex justify-between px-4 py-2.5 bg-surface">
+              <div className="flex justify-between px-5 py-3 bg-surface">
                 <span className="font-bold text-navy-900">الحالة</span>
                 <span className="font-mono-data font-bold text-emerald-600">مدفوعة بالكامل</span>
               </div>
             )}
           </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-8 mt-10 mb-6 text-sm text-slate-500">
-          <div className="border-t border-slate-300 pt-2 text-center">{data.type === 'sale' ? 'توقيع المستلم' : 'توقيع المسؤول'}</div>
-          <div className="border-t border-slate-300 pt-2 text-center">{data.type === 'sale' ? 'توقيع البائع' : 'توقيع المورّد'}</div>
         </div>
 
         {settings?.invoice_footer_message && (

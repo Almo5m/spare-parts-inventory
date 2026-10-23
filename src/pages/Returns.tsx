@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Loader2, Undo2 } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { invoicePartyName } from '../lib/party'
 import { nullableArg } from '../lib/rpcArgs'
 import { fetchAll } from '../lib/fetchAll'
 import Select from '../components/Select'
@@ -277,7 +278,7 @@ export default function Returns() {
                 .filter((inv) => inv.id === selectedInvoiceId || inv.invoice_number.toLowerCase().includes(invoiceSearch.trim().toLowerCase()))
                 .map((inv) => (
                 <option key={inv.id} value={inv.id}>
-                  {inv.invoice_number} — {customerNames[inv.customer_id ?? ''] ?? 'عميل نقدي'}
+                  {inv.invoice_number} — {invoicePartyName(customerNames[inv.customer_id ?? ''], inv.customer_name)}
                 </option>
               ))}
             </Select>
